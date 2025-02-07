@@ -1,0 +1,1 @@
+"""An integration for managing an Uplift Desk with the Uplift bluetooth adapter."""
