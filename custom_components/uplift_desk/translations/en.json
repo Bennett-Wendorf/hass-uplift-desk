@@ -1,0 +1,9 @@
+{
+    "entity": {
+        "sensor": {
+            "desk_height": {
+                "name": "Height"
+            }
+        }
+    }
+}

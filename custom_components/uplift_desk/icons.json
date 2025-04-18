@@ -1,0 +1,14 @@
+{
+    "entity":{
+        "sensor":{
+            "desk_height":{
+                "default": "mdi:human-male-height-variant"
+            }
+        }
+    },
+    "device":{
+        "desk":{
+            "default": "mdi:desk"
+        }
+    }
+}
