@@ -87,6 +87,10 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
     def desk_info(self):
         return str(self._desk)
 
+    @property
+    def is_connected(self):
+        return self._desk.bleak_client.is_connected
+
     async def async_connect(self):
         await self._desk.bleak_client.connect()
 
