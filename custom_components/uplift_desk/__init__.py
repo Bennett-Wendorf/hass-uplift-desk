@@ -16,8 +16,7 @@ from .coordinator import (
     Uplift_Desk_DeskConfigEntry,
 )
 
-_PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.BINARY_SENSOR] # TODO: Add other platforms as I go
-# _PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.BUTTON]
+_PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.BUTTON]
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -42,6 +41,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: Uplift_Desk_DeskConfigEn
 
 async def async_unload_entry(hass: HomeAssistant, entry: Uplift_Desk_DeskConfigEntry) -> bool:
     """Unload a config entry."""
+    coordinator: UpliftDeskBluetoothCoordinator = entry.runtime_data
+
     await coordinator.async_stop_notify()
     await coordinator.async_disconnect()
 

@@ -106,5 +106,11 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
     async def async_read_desk_height(self):
         return await self._desk.read_height()
 
+    async def async_sit(self):
+        await self._desk.move_to_sitting()
+
+    async def async_stand(self):
+        await self._desk.move_to_standing()
+
     async def _async_height_notify_callback(self, desk: Desk):
         self.async_set_updated_data(desk)
