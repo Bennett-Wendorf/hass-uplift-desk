@@ -1,0 +1,17 @@
+{
+    "entity": {
+        "sensor": {
+            "desk_height": {
+                "name": "Height"
+            }
+        },
+        "button": {
+            "desk_sit": {
+                "name": "Move to Sitting Preset"
+            },
+            "desk_stand": {
+                "name": "Move to Standing Preset"
+            }
+        }
+    }
+}
