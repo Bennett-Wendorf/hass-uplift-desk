@@ -22,10 +22,5 @@
                 "default": "mdi:arrow-expand-up"
             }
         }
-    },
-    "device":{
-        "desk":{
-            "default": "mdi:desk"
-        }
     }
 }
