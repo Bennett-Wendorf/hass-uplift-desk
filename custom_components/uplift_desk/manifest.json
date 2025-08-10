@@ -17,7 +17,7 @@
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/Bennett-Wendorf/hass-uplift-desk/issues",
   "requirements": [
-    "uplift-desk==1.1.3"
+    "uplift-ble==0.3.0"
   ],
-  "version": "1.0.0"
+  "version": "2.0.0"
 }

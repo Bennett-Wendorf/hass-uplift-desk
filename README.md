@@ -61,15 +61,14 @@ An integration for Home Assistant to control Uplift standing desks
 
 This is an **UNOFFICIAL** Home Assistant integration for control of Uplift Desk standing desks over Bluetooth Low Energy (BLE). For this library to work, you must have the [Uplift Bluetooth Adapter](https://www.upliftdesk.com/bluetooth-adapter-for-uplift-desk/?15775=12278) installed in a compatible desk. See their website for a better understanding of desk compatibility. 
 
-This integration relies on my uplift-desk Python package, which can be found on [PyPi](https://pypi.org/project/uplift-desk/) and [GitHub](https://github.com/Bennett-Wendorf/uplift-desk-controller). Please head over there if you have issues related to that library or would like to contribute to functionality :)
+This integration relies on the uplift-ble Python package, which can be found on [PyPi](https://pypi.org/project/uplift-ble/) and [GitHub](https://github.com/librick/uplift-ble). Please head over there if you have issues related to that library or would like to contribute to functionality :)
 
 > Note: When using this project, no other device can be connected to the desk or it will be undiscoverable. This means that the Uplift Desk app needs to be either disconnected or closed for this application to work.
 
-The integration currently provides 4 entities:
+The integration currently provides 3 entities:
 1. A sensor for the current height of the desk. This will update automatically as your desk is moving, though it is not instantaneous and should not be relied on for safety.
-2. A binary sensor for whether the desk is currently moving. Like height, this value is not instantaneous, so it's always a good idea to be near the desk for safety.
-3. A button to raise the desk to it's standing preset. This preset does not correspond to any of the presets on your desk's advanced keypad (if installed). It matches the standing preset defined in the app, and must be configured there before use.
-4. A button to lower the desk to it's sitting preset. This preset does not correspond to any of the presets on your desk's advanced keypad (if installed). It matches the sitting preset defined in the app, and must be configured there before use.
+2. A button to move the desk to its configured preset 1.
+3. A button to move the desk to its configured preset 2.
 
 
 <!-- Getting Started -->
@@ -112,6 +111,7 @@ Bennett Wendorf - [Website](https://bennettwendorf.dev/) - bennett@bennettwendor
 <!-- ACKNOWLEDGEMENTS -->
 ## Acknowledgements
 * [Img Shields](https://shields.io)
+* [uplift-ble](https://github.com/librick/uplift-ble)
 
 
 <!-- MARKDOWN LINKS & IMAGES -->

@@ -20,8 +20,6 @@ from . import Uplift_Desk_DeskConfigEntry
 from .coordinator import UpliftDeskBluetoothCoordinator
 from .const import DOMAIN
 
-from uplift import Desk
-
 _LOGGER = logging.getLogger(__name__)
 
 async def async_setup_entry(
@@ -69,10 +67,10 @@ class DeskHeightSensor(
     @property
     def native_value(self) -> float | None:
         """Return the current height."""
-        return self.coordinator.data.height
+        return self.coordinator.height_in
 
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
-        self._attr_native_value = self.coordinator.data.height
+        self._attr_native_value = self.coordinator.height_in
         self.async_write_ha_state()

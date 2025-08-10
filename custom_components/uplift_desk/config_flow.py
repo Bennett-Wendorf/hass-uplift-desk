@@ -1,6 +1,6 @@
 """Config flow for the Uplift Desk integration."""
 
-from uplift import Desk
+from uplift_ble.desk import Desk
 
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from .const import DOMAIN
@@ -34,7 +34,7 @@ class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
         self._abort_if_unique_id_configured()
 
         self._discovery_info = discovery_info
-        self._discovered_device = Desk(discovery_info.address, discovery_info.name)
+        self._discovered_device = Desk(discovery_info.address)
         
         return await self.async_step_bluetooth_confirm()
 
@@ -46,10 +46,10 @@ class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
         device = self._discovered_device
         assert self._discovery_info is not None
         discovery_info = self._discovery_info
-        title = device.name or discovery_info.name
+        title = discovery_info.name
         if user_input is not None:
             return self.async_create_entry(
-                title=title, data={"address": discovery_info.address}
+                title=title, data={"address": discovery_info.address, "name": discovery_info.name}
             )
 
         self._set_confirm_only()

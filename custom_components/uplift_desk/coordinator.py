@@ -1,11 +1,12 @@
-"""The govee Bluetooth integration."""
+"""The Uplift Desk integration."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
 import logging
 
-from uplift import Desk
+from uplift_ble.desk import Desk
+from uplift_ble.units import convert_mm_to_in
 
 from homeassistant.components.bluetooth import (
     BluetoothScanningMode,
@@ -23,7 +24,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from bleak import BleakClient
 
-from .const import DOMAIN
+from .const import DOMAIN, BLEAK_TIMEOUT_SECONDS
 
 type Uplift_Desk_DeskConfigEntry = ConfigEntry[UpliftDeskBluetoothCoordinator]  # noqa: F821
 
@@ -66,51 +67,52 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         self,
         hass: HomeAssistant,
         config_entry: Uplift_Desk_DeskConfigEntry,
-        desk: Desk
+        desk_address: str,
+        desk_name: str,
     ) -> None:
         """Initialize the Data Coordinator."""
         super().__init__(hass, _LOGGER, name="Uplift Desk", config_entry=config_entry)
-        _LOGGER.debug("Initializing coordinator for desk %s with config entry %s", desk, config_entry)
-        self._desk = desk
-        self._desk.bleak_client = BleakClient(desk.address, timeout=15)
-        self._desk.register_callback(self._async_height_notify_callback)
+        _LOGGER.debug("Initializing coordinator for desk %s:%s with config entry %s", desk_name, desk_address, config_entry)
+        self._desk = Desk(desk_address)
+        self.desk_name = desk_name
+        self._desk._client = BleakClient(desk_address, timeout=BLEAK_TIMEOUT_SECONDS)
+        self._desk.on_notification_height = self._async_height_notify_callback
 
     @property
     def desk_address(self):
         return self._desk.address
 
     @property
-    def desk_name(self):
-        return self._desk.name
-
-    @property
     def desk_info(self):
-        return str(self._desk)
+        return f"{self.desk_name} - {self.desk_address}"
 
     @property
     def is_connected(self):
-        return self._desk.bleak_client.is_connected
+        return self._desk._connected
 
     async def async_connect(self):
-        await self._desk.bleak_client.connect()
+        await self._desk.connect()
 
     async def async_disconnect(self):
-        await self._desk.bleak_client.disconnect()
-
-    async def async_start_notify(self):
-        await self._desk.start_notify()
-
-    async def async_stop_notify(self):
-        await self._desk.stop_notify()
+        await self._desk.disconnect()
 
     async def async_read_desk_height(self):
-        return await self._desk.read_height()
+        await self.async_wake()
+        last_known_height_mm = await self._desk.get_current_height()
+        self.height_in = convert_mm_to_in(last_known_height_mm)
+        return self.height_in
 
-    async def async_sit(self):
-        await self._desk.move_to_sitting()
+    async def async_preset_1(self):
+        await self.async_wake()
+        await self._desk.move_to_height_preset_1()
 
-    async def async_stand(self):
-        await self._desk.move_to_standing()
+    async def async_preset_2(self):
+        await self.async_wake()
+        await self._desk.move_to_height_preset_2()
 
-    async def _async_height_notify_callback(self, desk: Desk):
-        self.async_set_updated_data(desk)
+    async def async_wake(self):
+        await self._desk.wake()
+
+    def _async_height_notify_callback(self, height_mm: int):
+        self.height_in: int =  convert_mm_to_in(height_mm)
+        self.async_set_updated_data(self._desk)

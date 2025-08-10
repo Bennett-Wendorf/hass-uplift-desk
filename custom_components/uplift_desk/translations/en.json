@@ -6,11 +6,11 @@
             }
         },
         "button": {
-            "desk_sit": {
-                "name": "Move to Sitting Preset"
+            "desk_preset_1": {
+                "name": "Move to Preset 1"
             },
-            "desk_stand": {
-                "name": "Move to Standing Preset"
+            "desk_preset_2": {
+                "name": "Move to Preset 2"
             }
         }
     }
