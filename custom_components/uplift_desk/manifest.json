@@ -2,10 +2,11 @@
   "domain": "uplift_desk",
   "name": "Uplift Desk",
   "bluetooth": [
-    {
-      "service_uuid": "0000fe60-0000-1000-8000-00805f9b34fb"
-    }
-  ],
+      { "service_uuid": "0000ff00-0000-1000-8000-00805f9b34fb" },
+      { "service_uuid": "0000fe60-0000-1000-8000-00805f9b34fb" },
+      { "service_uuid": "000000ff-0000-1000-8000-00805f9b34fb" },
+      { "service_uuid": "0000ff12-0000-1000-8000-00805f9b34fb" }
+    ],
   "codeowners": [
     "@Bennett-Wendorf"
   ],
