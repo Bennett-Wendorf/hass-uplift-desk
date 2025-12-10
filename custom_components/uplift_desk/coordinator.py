@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import logging
+import asyncio
 
-from uplift_ble.desk import Desk
-from uplift_ble.units import convert_mm_to_in
+# TODO: Revert this back to installed uplift_ble package instead of local
+from .uplift_ble.desk_controller import DeskController
+from .uplift_ble.desk_validator import DeskValidator
+from .uplift_ble.desk_enums import DeskEventType
 
 from homeassistant.components.bluetooth import (
     BluetoothScanningMode,
@@ -25,10 +28,18 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from bleak import BleakClient
 
 from .const import DOMAIN, BLEAK_TIMEOUT_SECONDS
+from .models import DiscoveredDesk
 
 type Uplift_Desk_DeskConfigEntry = ConfigEntry[UpliftDeskBluetoothCoordinator]  # noqa: F821
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
+
+def convert_mm_to_in(millimeters: int | float) -> float:
+    """
+    Converts a value in millimeters to inches.
+    """
+    # 1 inch = 25.4 mm
+    return millimeters / 25.4
 
 def process_service_info(
     hass: HomeAssistant,
@@ -73,14 +84,28 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         """Initialize the Data Coordinator."""
         super().__init__(hass, _LOGGER, name="Uplift Desk", config_entry=config_entry)
         _LOGGER.debug("Initializing coordinator for desk %s:%s with config entry %s", desk_name, desk_address, config_entry)
-        self._desk = Desk(desk_address)
-        self.desk_name = desk_name
-        self._desk._client = BleakClient(desk_address, timeout=BLEAK_TIMEOUT_SECONDS)
-        self._desk.on_notification_height = self._async_height_notify_callback
+
+        self._desk_validator = DeskValidator()
+        self._discovered_desk = DiscoveredDesk(name=desk_name, address=desk_address)
+        self._desk = None
+
+    async def _get_desk_controller(self):
+        if self._desk is None:          
+            validated_desk: DiscoveredDesk = await self._desk_validator.validate_device(self._discovered_desk, timeout=BLEAK_TIMEOUT_SECONDS)
+
+            client = BleakClient(validated_desk.address, timeout=BLEAK_TIMEOUT_SECONDS)
+            await client.connect()
+            self._desk = validated_desk.create_controller(client)
+            self._desk.on(DeskEventType.HEIGHT, self._async_height_notify_callback)
+        return self._desk
+
+    @property
+    def desk_name(self):
+        return self._discovered_desk.name
 
     @property
     def desk_address(self):
-        return self._desk.address
+        return self._discovered_desk.address
 
     @property
     def desk_info(self):
@@ -88,31 +113,36 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
 
     @property
     def is_connected(self):
-        return self._desk._connected
+        if self._desk is None:
+            return False
+        return self._desk.client.is_connected
 
     async def async_connect(self):
-        await self._desk.connect()
+        await (await self._get_desk_controller()).start()
 
     async def async_disconnect(self):
-        await self._desk.disconnect()
+        controller = await self._get_desk_controller()
+        await controller.stop()
+        await controller.client.disconnect()
 
     async def async_read_desk_height(self):
-        await self.async_wake()
-        last_known_height_mm = await self._desk.get_current_height()
-        self.height_in = convert_mm_to_in(last_known_height_mm)
+        # await self.async_wake()
+        await (await self._get_desk_controller()).request_height_limits()
+        self.height_in = convert_mm_to_in((await self._get_desk_controller()).height_mm)
         return self.height_in
 
     async def async_preset_1(self):
         await self.async_wake()
-        await self._desk.move_to_height_preset_1()
+        await (await self._get_desk_controller()).move_to_height_preset_1()
 
     async def async_preset_2(self):
         await self.async_wake()
-        await self._desk.move_to_height_preset_2()
+        await (await self._get_desk_controller()).move_to_height_preset_2()
 
     async def async_wake(self):
-        await self._desk.wake()
+        await (await self._get_desk_controller()).wake()
 
     def _async_height_notify_callback(self, height_mm: int):
+        _LOGGER.debug("Height notify callback received height: %d mm", height_mm)
         self.height_in: int =  convert_mm_to_in(height_mm)
         self.async_set_updated_data(self._desk)

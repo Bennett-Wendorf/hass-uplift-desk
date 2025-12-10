@@ -1,6 +1,8 @@
 """Config flow for the Uplift Desk integration."""
 
-from uplift_ble.desk import Desk
+# TODO: Revert this back to installed uplift_ble package instead of local
+from .uplift_ble.desk_controller import DeskController
+from .uplift_ble.desk_validator import DeskValidator
 
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from .const import DOMAIN
@@ -34,7 +36,10 @@ class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
         self._abort_if_unique_id_configured()
 
         self._discovery_info = discovery_info
-        self._discovered_device = Desk(discovery_info.address)
+
+        self._desk_validator = DeskValidator()
+
+        self._discovered_device = self._desk_validator.validate_device(discovery_info.address)
         
         return await self.async_step_bluetooth_confirm()
 
