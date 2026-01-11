@@ -1,4 +1,4 @@
-"""The govee Bluetooth integration."""
+"""The uplift desk Bluetooth integration."""
 
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ from homeassistant.core import CoreState, HomeAssistant
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from bleak import BleakClient
+from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
 
 from .const import DOMAIN
 
@@ -72,7 +73,6 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         super().__init__(hass, _LOGGER, name="Uplift Desk", config_entry=config_entry)
         _LOGGER.debug("Initializing coordinator for desk %s with config entry %s", desk, config_entry)
         self._desk = desk
-        self._desk.bleak_client = BleakClient(desk.address, timeout=15)
         self._desk.register_callback(self._async_height_notify_callback)
 
     @property
@@ -89,13 +89,23 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
 
     @property
     def is_connected(self):
-        return self._desk.bleak_client.is_connected
+        return self._desk.bleak_client is not None and\
+            self._desk.bleak_client.is_connected
 
     async def async_connect(self):
-        await self._desk.bleak_client.connect()
+        if not self.is_connected:
+            self._desk.bleak_client = await establish_connection(
+                BleakClientWithServiceCache,
+                self.desk_address,
+                self.desk_name or "Unknown",
+                max_attempts=3
+            )
 
     async def async_disconnect(self):
-        await self._desk.bleak_client.disconnect()
+        try:
+            await self._desk.bleak_client.disconnect()
+        finally:
+            self._desk.bleak_client = None
 
     async def async_start_notify(self):
         await self._desk.start_notify()
