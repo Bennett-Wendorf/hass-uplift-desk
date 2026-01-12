@@ -90,7 +90,7 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         self._desk = None
 
     async def _get_desk_controller(self):
-        if self._desk is None:          
+        if self._desk is None:
             validated_desk: DiscoveredDesk = await self._desk_validator.validate_device(self._discovered_desk, timeout=BLEAK_TIMEOUT_SECONDS)
 
             client = BleakClient(validated_desk.address, timeout=BLEAK_TIMEOUT_SECONDS)

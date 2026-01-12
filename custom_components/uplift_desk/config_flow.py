@@ -14,6 +14,10 @@ from homeassistant.components.bluetooth import (
     async_discovered_service_info,
 )
 
+import voluptuous as vol
+
+from homeassistant.helpers.selector import selector
+
 class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
     """Uplift Desk config flow."""
     # The schema version of the entries that it creates
@@ -39,7 +43,7 @@ class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
 
         self._desk_validator = DeskValidator()
 
-        self._discovered_device = self._desk_validator.validate_device(discovery_info.address)
+        self._discovered_device = await self._desk_validator.validate_device(discovery_info)
         
         return await self.async_step_bluetooth_confirm()
 
@@ -64,4 +68,18 @@ class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="bluetooth_confirm", description_placeholders=placeholders
         )
 
-    # TODO: Allow config flow to work manually as well
+    async def async_step_user(self, user_input=None):
+        """Handle a flow initialized by the user."""
+        data_schema = {
+            vol.Required("test1"): str,
+            vol.Required("test2"): str
+        }
+
+        if self.show_advanced_options:
+            data_schema[vol.Optional("test3")] = selector({
+                "select": {
+                    "options": ["all", "light", "switch"],
+                }
+            })
+
+        return self.async_show_form(step_id="user", data_schema=vol.Schema(data_schema))
