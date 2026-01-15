@@ -1,4 +1,4 @@
-"""The govee Bluetooth integration."""
+"""The uplift desk Bluetooth integration."""
 
 from __future__ import annotations
 
@@ -7,10 +7,7 @@ import logging
 
 from uplift import Desk
 
-from homeassistant.components.bluetooth import (
-    BluetoothScanningMode,
-    BluetoothServiceInfoBleak,
-)
+from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
@@ -22,6 +19,8 @@ from homeassistant.core import CoreState, HomeAssistant
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from bleak import BleakClient
+from bleak.backends.device import BLEDevice
+from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
 
 from .const import DOMAIN
 
@@ -66,13 +65,17 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         self,
         hass: HomeAssistant,
         config_entry: Uplift_Desk_DeskConfigEntry,
-        desk: Desk
+        ble_device: BLEDevice
     ) -> None:
         """Initialize the Data Coordinator."""
         super().__init__(hass, _LOGGER, name="Uplift Desk", config_entry=config_entry)
+
+        desk = Desk(ble_device.address, config_entry.title)
         _LOGGER.debug("Initializing coordinator for desk %s with config entry %s", desk, config_entry)
+
+        self._ble_device = ble_device
+
         self._desk = desk
-        self._desk.bleak_client = BleakClient(desk.address, timeout=15)
         self._desk.register_callback(self._async_height_notify_callback)
 
     @property
@@ -89,13 +92,23 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
 
     @property
     def is_connected(self):
-        return self._desk.bleak_client.is_connected
+        return self._desk.bleak_client is not None and\
+            self._desk.bleak_client.is_connected
 
     async def async_connect(self):
-        await self._desk.bleak_client.connect()
+        if not self.is_connected:
+            self._desk.bleak_client = await establish_connection(
+                BleakClientWithServiceCache,
+                self._ble_device,
+                self._ble_device.name or self.desk_name or "Unknown",
+                max_attempts=3
+            )
 
     async def async_disconnect(self):
-        await self._desk.bleak_client.disconnect()
+        try:
+            await self._desk.bleak_client.disconnect()
+        finally:
+            self._desk.bleak_client = None
 
     async def async_start_notify(self):
         await self._desk.start_notify()
