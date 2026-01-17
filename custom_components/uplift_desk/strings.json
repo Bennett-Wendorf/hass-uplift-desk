@@ -9,5 +9,10 @@
             "single_instance_allowed": "[%key:common::config_flow::abort::single_instance_allowed%]",
             "no_devices_found": "[%key:common::config_flow::abort::no_devices_found%]"
         }
+    },
+    "exceptions": {
+        "device_not_found_error": {
+            "message": "Could not find Uplift Desk with address {address}"
+        }
     }
 }
