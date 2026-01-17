@@ -36,10 +36,6 @@ class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
         self._abort_if_unique_id_configured()
 
         self._discovery_info = discovery_info
-
-        self._desk_validator = DeskValidator()
-
-        self._discovered_device = self._desk_validator.validate_device(discovery_info.address)
         
         return await self.async_step_bluetooth_confirm()
 
@@ -47,8 +43,6 @@ class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Confirm discovery."""
-        assert self._discovered_device is not None
-        device = self._discovered_device
         assert self._discovery_info is not None
         discovery_info = self._discovery_info
         title = discovery_info.name
