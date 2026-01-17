@@ -24,10 +24,6 @@ class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
     def __init__(self) -> None:
         """Initialize the config flow."""
         self._discovery_info: BluetoothServiceInfoBleak | None = None
-        self._discovered_device: Desk | None = None
-        self._discovered_devices: dict[
-            str, tuple[Desk, BluetoothServiceInfoBleak]
-        ] = {}
 
     async def async_step_bluetooth(self, discovery_info: BluetoothServiceInfoBleak) -> ConfigFlowResult:
         """Handle a discovered Bluetooth device."""

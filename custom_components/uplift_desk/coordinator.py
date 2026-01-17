@@ -11,7 +11,7 @@ from .uplift_ble.desk_controller import DeskController
 from .uplift_ble.desk_validator import DeskValidator
 from .uplift_ble.desk_enums import DeskEventType
 from .uplift_ble.ble_protos import (
-    BLEClientProtocol, 
+    BLEClientProtocol,
     BLEDeviceProtocol
 )
 
@@ -74,12 +74,12 @@ def format_event_dispatcher_name(address: str, key: str) -> str:
     return f"{DOMAIN}_{address}_{key}"
 
 def _generate_existing_client_factory(bleak_client: BleakClient) -> Callable[..., BLEClientProtocol]:
-        def _existing_client_factory(
-            device: BLEDeviceProtocol, timeout: float
-        ) -> BLEClientProtocol:
-            return bleak_client
+    def _existing_client_factory(
+        device: BLEDeviceProtocol, timeout: float
+    ) -> BLEClientProtocol:
+        return bleak_client
 
-        return _existing_client_factory
+    return _existing_client_factory
 
 class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
     """Define the Update Coordinator."""
@@ -100,32 +100,25 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
 
     async def _get_desk_controller(self):
         _LOGGER.debug("Getting desk controller for %s", self.desk_info)
-        _LOGGER.debug("self._desk is %s", self._desk)
-        _LOGGER.debug("self.is_connected is %s", self.is_connected)
         if self._desk is None or not self.is_connected:
             bleak_client = await establish_connection(
-                BleakClientWithServiceCache, 
+                BleakClientWithServiceCache,
                 self._desk_ble_device, 
                 self._desk_ble_device.name or self.desk_name or "Unknown",
                 max_attempts=3
             )
-            _LOGGER.debug("bleak_client is %s", bleak_client)
 
             bleak_client_factory: Callable[..., BLEClientProtocol] = _generate_existing_client_factory(bleak_client)
-            _LOGGER.debug("bleak_client_factory is %s", bleak_client_factory)
             
             validated_desk: DiscoveredDesk = await DeskValidator(bleak_client_factory).validate_device(self._discovered_desk)
-            _LOGGER.debug("validated_desk is %s", validated_desk)
 
             bleak_client = await establish_connection(
-                BleakClientWithServiceCache, 
+                BleakClientWithServiceCache,
                 self._desk_ble_device, 
                 self._desk_ble_device.name or self.desk_name or "Unknown",
                 max_attempts=3
             )
-            _LOGGER.debug("Re-established bleak_client is %s", bleak_client)
             self._desk = validated_desk.create_controller(bleak_client)
-            _LOGGER.debug("self._desk is %s", self._desk)
             self._desk.on(DeskEventType.HEIGHT, self._async_height_notify_callback)
 
         return self._desk
