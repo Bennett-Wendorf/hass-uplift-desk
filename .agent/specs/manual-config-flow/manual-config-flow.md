@@ -26,6 +26,12 @@ Currently, the Uplift Desk integration only supports Bluetooth discovery-based s
 #### 1.1 Create User Step (`async_step_user`)
 Implement `async_step_user` with the following flow:
 
+> **Step Registration Mechanism**: In Home Assistant config flows, every `step_id` passed to `async_show_form()` or `async_finish_form()` **must** correspond to a registered handler method named `async_step_{step_id}`. The step_id values in this plan are:
+> - `"user"` → handler `async_step_user`
+> - `"user_manual"` → handler `async_step_user_manual`
+> - `"user_confirm"` → handler `async_step_user_confirm`
+> These are all auto-registered by Home Assistant based on method naming convention — no explicit registration is needed.
+
 **Step 1: Bluetooth Scan**
 - Automatically initiate a Bluetooth scan for Uplift Desk devices
 - Display discovered devices in a list for user to select
@@ -34,19 +40,21 @@ Implement `async_step_user` with the following flow:
 - On device selection, transition to Step 2
 
 **Step 1b: Manual Entry Fallback** (shown via "Show manual entry option")
-- Display manual address input form
+- Display manual address input form via `async_show_form(step_id="user_manual", ...)`
+- Routes to handler `async_step_user_manual` automatically
 - User enters Bluetooth address (MAC address format)
 - Optional: Allow user to provide custom name
 - On submit, transition to Step 2
 
 **Step 2: Device Information Lookup/Validation**
 - For scanned device: Use discovered device info, attempt brief connection to verify it's a valid Uplift Desk
-- For manual entry: Attempt to connect using provided address, validate device exists and is Uplift Desk, retrieve device name
+- For manual entry: Use data provided from `async_step_user_manual`, attempt connection, validate device exists and is Uplift Desk, retrieve device name
 - Handle connection timeouts gracefully with clear error messages
 - On success, transition to Step 3
 
 **Step 3: Confirmation Dialog**
-- Show device information (name, address) to user for confirmation
+- Show device information (name, address) to user for confirmation via `async_show_form(step_id="user_confirm", ...)`
+- Routes to handler `async_step_user_confirm` automatically
 - Provide confirmation button
 - On submit, create config entry and finish
 
