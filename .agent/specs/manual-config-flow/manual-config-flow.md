@@ -202,6 +202,95 @@ Before implementing, review the existing code:
 3. Verify if device name can be retrieved post-discovery for manual entries
 4. Review existing discovery flow tests to understand expected behavior
 
+### Manual Entry: Constructing a `BLEDeviceProtocol` Object
+
+The `DeskValidator.validate_device()` method (desk_validator.py:74) accepts a `BLEDeviceProtocol`, not a raw MAC address string. During manual entry, the user provides a MAC address as text (`"AA:BB:CC:DD:EE:FF"`), which must be wrapped into a `BLEDeviceProtocol`-compatible object before passing it to `DeskValidator`.
+
+**Why this matters:** The manual config flow (phase 1, step 1b) asks the user for a MAC address string via a text input. Meanwhile, `DeskValidator.validate_device()` expects a `BLEDeviceProtocol` object. The spec must document how to construct this object manually.
+
+**`BLEDeviceProtocol` definition** (ble_protos.py:40-45):
+```python
+class BLEDeviceProtocol(Protocol):
+    @property
+    def name(self) -> str | None: ...
+
+    @property
+    def address(self) -> str: ...
+```
+
+There are two approaches for the manual flow:
+
+#### Approach A: Simple Stub Dataclass (Recommended)
+
+Create a lightweight `dataclass` that provides the two required attributes. Since `BLEDeviceProtocol` is a [structural protocol](https://peps.python.org/pep-0544/) (duck-typed), any object with `.address` and `.name` works — no inheritance required.
+
+```python
+from dataclasses import dataclass
+
+@dataclass
+class _ManualBLEDevice:
+    """BLEDeviceProtocol-compatible stub for manual entry."""
+    address: str
+    name: str | None = None
+```
+
+Usage in config flow (inside `async_step_user_manual`, after collecting user input):
+```python
+# user_input["address"] is the MAC string from the UI
+manual_device = _ManualBLEDevice(
+    address=user_input["address"],
+    name=user_input.get("name"),  # may be None or user-provided
+)
+
+self._discovered_device = await self._desk_validator.validate_device(manual_device)
+if self._discovered_device is None:
+    return self.async_show_form(
+        step_id="user_manual",
+        data_schema=vol.Schema({
+            vol.Required("address"): str,
+            vol.Optional("name"): str,
+        }),
+        errors={"base": "invalid_address"},
+    )
+
+# Discovery succeeded - capture the real name from the validated device
+self._manual_address = self._discovered_device.address
+self._manual_name = self._discovered_device.name
+```
+
+#### Approach B: Home Assistant's `BluetoothServiceInfoBleak`
+
+Alternatively, construct a `BluetoothServiceInfoBleak` object from the user-entered address and pass it to `DeskValidator`. This requires accessing Home Assistant internals:
+
+```python
+from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
+from bleak import BLEDevice
+
+# Build a Bleak BLEDevice from the MAC address, then wrap it
+bleak_device = BLEDevice(
+    address=user_input["address"],
+    name=user_input.get("name"),
+)
+manual_device = BluetoothServiceInfoBleak(
+    name=user_input.get("name", "") or "manual",
+    address=user_input["address"],
+    rssi=-100,  # placeholder since we don't have radio data
+    device=bleak_device,
+    details=None,
+    advertisement=None,
+)
+```
+
+**Approach A is preferred** because:
+- `BLEDeviceProtocol` is a structural `Protocol` — it only requires `.address` and `.name` properties.
+- `DeskValidator` calls `self._client_factory(device, timeout)` which invokes `BleakClient(address_or_ble_device=device.address, ...)` (desk_validator.py:139). This only uses `device.address`, so a minimal stub suffices.
+- Approach B adds unnecessary dependencies on Home Assistant internals and requires more boilerplate.
+- The stub dataclass is self-contained, easy to test, and clearly documents the contract.
+
+**Important notes for implementation:**
+- The user's optional `name` input should be passed as the stub's `name` attribute, but if `DeskValidator` successfully connects, the real device name from the validated `DiscoveredDesk` should override it (since the user input may be incorrect or empty).
+- MAC address format validation should happen in the form schema (e.g., via a `Voluptuous` regex or a helper function), not rely on `DeskValidator` for this.
+
 ### Implementation Sequence (Future Work)
 
 1. Implement `async_step_user` and `async_step_user_confirm` methods
