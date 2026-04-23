@@ -47,8 +47,9 @@ Implement `async_step_user` with the following flow:
 - On submit, transition to Step 2
 
 **Step 2: Device Information Lookup/Validation**
-- For scanned device: Use discovered device info, attempt brief connection to verify it's a valid Uplift Desk
-- For manual entry: Use data provided from `async_step_user_manual`, attempt connection, validate device exists and is Uplift Desk, retrieve device name
+- For scanned device: Use device info stored on `self` (from discovery scan), attempt brief connection to verify it's a valid Uplift Desk
+- For manual entry: Attempt to connect using provided address, validate device exists and is Uplift Desk, retrieve device name, store results on `self`
+- **Important**: Discovered/validated device info is stored on `self` (instance attributes), NOT in `user_input`. `user_input` only carries the user's form submission (e.g., address string or dropdown selection).
 - Handle connection timeouts gracefully with clear error messages
 - On success, transition to Step 3
 
@@ -65,8 +66,9 @@ async def async_step_user(self, user_input=None):
     """Handle flow initialized by user."""
     if user_input is not None:
         if user_input.get("select_device"):
-            # User selected a discovered device, proceed to confirmation
-            return await self.async_step_user_confirm(user_input)
+            # User selected a discovered device: device info is already on self._discovered_device
+            # from the scan. Do NOT pass it through user_input.
+            return await self.async_step_user_confirm()
         elif user_input.get("manual_entry"):
             # User wants manual address entry, show manual form
             return self.async_show_form(
@@ -78,7 +80,8 @@ async def async_step_user(self, user_input=None):
             )
         else:
             # Process user input and continue flow
-            return await self.async_step_user_confirm(user_input)
+            # device info is already on self from the scan
+            return await self.async_step_user_confirm()
     
     # Show scan results
     return self.async_show_form(
@@ -97,11 +100,17 @@ async def async_step_user(self, user_input=None):
 async def async_step_user_manual(self, user_input=None):
     """Show manual address entry form."""
     if user_input is not None:
-        # Validate address and continue to confirmation
-        self._manual_address = user_input["address"]
-        self._manual_name = user_input.get("name")
-        return await self.async_step_user_confirm(user_input)
-    
+        # Validate address and store on self for later steps
+        self._discovered_device = await self._desk_validator.validate_address(
+            user_input["address"]
+        )
+        self._discovery_info = BluetoothServiceInfoBleak(
+            name=user_input.get("name", user_input["address"]),
+            address=user_input["address"],
+            ...
+        )
+        return await self.async_step_user_confirm()
+
     return self.async_show_form(
         step_id="user_manual",
         data_schema=vol.Schema({
@@ -110,11 +119,31 @@ async def async_step_user_manual(self, user_input=None):
         })
     )
 
-async def async_step_user_confirm(self, user_input):
-    """Confirm device details."""
-    # Validate device exists and is an Uplift Desk
-    # Show confirmation dialog
-    # On submit, create entry
+async def async_step_user_confirm(self, user_input=None):
+    """Confirm device details.
+    
+    IMPORTANT: Device info comes from self attributes (set by prior steps),
+    NOT from user_input. user_input only carries what the user typed.
+    """
+    # Access discovered device info from self, not user_input
+    assert self._discovered_device is not None
+    device = self._discovered_device
+    assert self._discovery_info is not None
+    discovery_info = self._discovery_info
+    
+    if user_input is not None:
+        return self.async_create_entry(
+            title=discovery_info.name,
+            data={"address": discovery_info.address, "name": discovery_info.name},
+        )
+
+    self._set_confirm_only()
+    placeholders = {"name": discovery_info.name, "address": discovery_info.address}
+    self.context["title_placeholders"] = placeholders
+    return self.async_show_form(
+        step_id="user_confirm",
+        description_placeholders=placeholders,
+    )
 ```
 
 #### 1.3 Integration with Existing Code
