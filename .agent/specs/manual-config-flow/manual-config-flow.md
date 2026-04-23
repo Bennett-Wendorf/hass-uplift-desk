@@ -12,6 +12,35 @@ Currently, the Uplift Desk integration only supports Bluetooth discovery-based s
 - Stores device address and name in config entry
 - Unique ID is set to Bluetooth MAC address
 
+### Manual Config Flow (`async_step_user`) — Current Stubs
+
+The `async_step_user` method in `config_flow.py` is **not yet implemented**. It currently contains only placeholder/stub form fields that need to be replaced:
+
+```python
+async def async_step_user(self, user_input=None):
+    """Handle a flow initialized by the user."""
+    data_schema = {
+        vol.Required("test1"): str,
+        vol.Required("test2"): str
+    }
+
+    if self.show_advanced_options:
+        data_schema[vol.Optional("test3")] = selector({
+            "select": {
+                "options": ["all", "light", "switch"],
+            }
+        })
+
+    return self.async_show_form(step_id="user", data_schema=vol.Schema(data_schema))
+```
+
+**Baseline state summary:**
+- No Bluetooth scan functionality exists — `self._discovered_devices` is always empty
+- Form has two placeholder required fields (`test1`, `test2`) and one optional field (`test3`)
+- These placeholder fields have no validation, no user-facing labels, and serve no purpose
+- No multi-step flow, no manual address entry, no device validation, no confirmation step
+- This stub was left from initial scaffold/development and must be completely replaced
+
 ### Code Locations
 - Config flow logic: `/custom_components/uplift_desk/config_flow.py`
 - Device validator: `/custom_components/uplift_desk/uplift_ble/desk_validator.py`
