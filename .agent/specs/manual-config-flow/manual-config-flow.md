@@ -61,19 +61,32 @@ Implement `async_step_user` with the following flow:
 > - `"user_confirm"` → handler `async_step_user_confirm`
 > These are all auto-registered by Home Assistant based on method naming convention — no explicit registration is needed.
 
-**Step 1: Bluetooth Scan**
-- Automatically initiate a Bluetooth scan for Uplift Desk devices
-- Display discovered devices in a list for user to select
-- Allow up to 10-15 seconds for scan to complete
-- Provide a "Show manual entry option" button as fallback
-- On device selection, transition to Step 2
+**Step 1: Bluetooth Discovery (Cached Results)**
+- Home Assistant's background Bluetooth scanner runs continuously when the `bluetooth_adapters` integration is configured.
+- `async_discovered_service_info(hass)` (from `homeassistant.components.bluetooth`) returns **only devices already discovered and cached** by this background scanner — it does **not** initiate a new scan.
+- There is **no Home Assistant API** to programmatically trigger a Bluetooth scan from within a config flow step. The background scanner operates independently and asynchronously.
+- Display already-discovered Uplift Desk devices in a dropdown list for user selection.
+- If no devices are shown in the dropdown, this is expected behavior — the device may not have been discovered yet by the background scanner.
+- Provide a "Manual entry" button as the primary fallback for devices not yet discovered.
+- On device selection, transition to Step 2.
 
-**Step 1b: Manual Entry Fallback** (shown via "Show manual entry option")
-- Display manual address input form via `async_show_form(step_id="user_manual", ...)`
-- Routes to handler `async_step_user_manual` automatically
-- User enters Bluetooth address (MAC address format)
-- Optional: Allow user to provide custom name
-- On submit, transition to Step 2
+> **Important: Bluetooth API Limitations**
+> The following Home Assistant Bluetooth APIs are available during config flow execution:
+> 
+> | API | Behavior | Can trigger scan? |
+> |-----|----------|-------------------|
+> | `async_discovered_service_info(hass)` | Returns `list[BluetoothServiceInfoBleak]` from the background scanner's cache | **No** — only returns already-discovered devices |
+> | `async_ble_device_from_discovery_info(info)` | Converts discovery info to a `BLEDeviceProtocol`-compatible object | **No** — requires existing discovery info |
+> | `async_start_scanning()` / `async_stop_scanning()` | Available in `hass.data[bluetooth_scanner_key]` | **No** — these control the scanner globally and are not intended for config flow use; calling them from a config flow could disrupt other integrations' discovery |
+> 
+> **Why there's no "scan and wait" pattern:**
+> - Bluetooth LE discovery is hardware-limited (advertising intervals are 20–100ms per device, with scan windows typically 10–100ms).
+> - The background scanner runs on a fixed interval and caches results internally.
+> - Config flow steps are synchronous HTTP requests — blocking for 10–15 seconds waiting for a scan would hang the UI.
+> - No API exists to "start scanning and report when a specific device appears."
+> 
+> **Recommended approach:** Use cached discovery results + manual entry fallback. This is the same pattern used by many Home Assistant Bluetooth integrations (e.g., `bluetooth_scale`, `govee_lan`).
+
 
 **Step 2: Device Information Lookup/Validation**
 - For scanned device: Use device info stored on `self` (from discovery scan), attempt brief connection to verify it's a valid Uplift Desk
