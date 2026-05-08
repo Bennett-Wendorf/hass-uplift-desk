@@ -48,236 +48,94 @@ async def async_step_user(self, user_input=None):
 - Models: `/custom_components/uplift_desk/models.py`
 - Constants: `/custom_components/uplift_desk/const.py`
 
+
 ## Implementation Plan
 
-### Phase 1: Manual Config Flow Structure
+**What's already correctly validated** (no changes needed):
+- `BLEAK_TIMEOUT_SECONDS` location in `const.py` — all connection attempts must use this constant
+- File paths (`config_flow.py`, `desk_validator.py`, `models.py`, `const.py`) — accurate
+- `DeskValidator` approach — single entry point for device validation, reuse for both discovery and manual
+- Unique ID = MAC address — prevents duplicate configs
+- `async_step_bluetooth` discovery flow — manual flow must store data identically
 
-#### 1.1 Create User Step (`async_step_user`)
-Implement `async_step_user` with the following flow:
+### Phase 1: Config Flow Implementation
 
-> **Step Registration Mechanism**: In Home Assistant config flows, every `step_id` passed to `async_show_form()` or `async_finish_form()` **must** correspond to a registered handler method named `async_step_{step_id}`. The step_id values in this plan are:
-> - `"user"` → handler `async_step_user`
-> - `"user_manual"` → handler `async_step_user_manual`
-> - `"user_confirm"` → handler `async_step_user_confirm`
-> These are all auto-registered by Home Assistant based on method naming convention — no explicit registration is needed.
+Replace the stub `async_step_user` with a real 3-step flow in `config_flow.py`:
 
-**Step 1: Bluetooth Discovery (Cached Results)**
-- Home Assistant's background Bluetooth scanner runs continuously when the `bluetooth_adapters` integration is configured.
-- `async_discovered_service_info(hass)` (from `homeassistant.components.bluetooth`) returns **only devices already discovered and cached** by this background scanner — it does **not** initiate a new scan.
-- There is **no Home Assistant API** to programmatically trigger a Bluetooth scan from within a config flow step. The background scanner operates independently and asynchronously.
-- Display already-discovered Uplift Desk devices in a dropdown list for user selection.
-- If no devices are shown in the dropdown, this is expected behavior — the device may not have been discovered yet by the background scanner.
-- Provide a "Manual entry" button as the primary fallback for devices not yet discovered.
-- On device selection, transition to Step 2.
+**Step 1 — `async_step_user`**: Show discovered devices (from cached background scanner) in a dropdown, plus a "Manual entry" button for devices not yet discovered.
 
-> **Important: Bluetooth API Limitations**
-> The following Home Assistant Bluetooth APIs are available during config flow execution:
-> 
-> | API | Behavior | Can trigger scan? |
-> |-----|----------|-------------------|
-> | `async_discovered_service_info(hass)` | Returns `list[BluetoothServiceInfoBleak]` from the background scanner's cache | **No** — only returns already-discovered devices |
-> | `async_ble_device_from_discovery_info(info)` | Converts discovery info to a `BLEDeviceProtocol`-compatible object | **No** — requires existing discovery info |
-> | `async_start_scanning()` / `async_stop_scanning()` | Available in `hass.data[bluetooth_scanner_key]` | **No** — these control the scanner globally and are not intended for config flow use; calling them from a config flow could disrupt other integrations' discovery |
-> 
-> **Why there's no "scan and wait" pattern:**
-> - Bluetooth LE discovery is hardware-limited (advertising intervals are 20–100ms per device, with scan windows typically 10–100ms).
-> - The background scanner runs on a fixed interval and caches results internally.
-> - Config flow steps are synchronous HTTP requests — blocking for 10–15 seconds waiting for a scan would hang the UI.
-> - No API exists to "start scanning and report when a specific device appears."
-> 
-> **Recommended approach:** Use cached discovery results + manual entry fallback. This is the same pattern used by many Home Assistant Bluetooth integrations (e.g., `bluetooth_scale`, `govee_lan`).
+**Step 2 — `async_step_user_manual`**: Accept MAC address (and optional name) from the user. Construct a `BLEDeviceProtocol` stub dataclass with `.address` and `.name`, pass it to `DeskValidator.validate_device()`, and store the validated `DiscoveredDesk` on `self`. On failure, re-show the form with an error.
 
+**Step 3 — `async_step_user_confirm`**: Display device name and address from `self` (not `user_input`), let the user confirm, then create the config entry with `{address, name}` data and MAC as unique ID.
 
-**Step 2: Device Information Lookup/Validation**
-- For scanned device: Use device info stored on `self` (from discovery scan), attempt brief connection to verify it's a valid Uplift Desk
-- For manual entry: Attempt to connect using provided address, validate device exists and is Uplift Desk, retrieve device name, store results on `self`
-- **Important**: Discovered/validated device info is stored on `self` (instance attributes), NOT in `user_input`. `user_input` only carries the user's form submission (e.g., address string or dropdown selection).
-- Handle connection timeouts gracefully with clear error messages
-- On success, transition to Step 3
+Key details:
+- Store validated device info on `self` instance attributes (`_discovered_device`, `_discovery_info`), NOT in `user_input`.
+- Set unique ID to MAC address, consistent with discovery flow.
+- Use `_abort_if_unique_id_configured()` to prevent duplicates.
+- `BLEDeviceProtocol` stub (Approach A, recommended): a 3-line `@dataclass` with `address: str` and `name: str | None = None`. Only `.address` is actually used by `DeskValidator` (it passes it to `BleakClient(address_or_ble_device=device.address, ...)`).
+- MAC format validation should happen in the form schema, not rely on `DeskValidator`.
 
-**Step 3: Confirmation Dialog**
-- Show device information (name, address) to user for confirmation via `async_show_form(step_id="user_confirm", ...)`
-- Routes to handler `async_step_user_confirm` automatically
-- Provide confirmation button
-- On submit, create config entry and finish
+> **See the `### Manual Entry: Constructing a BLEDeviceProtocol Object` section below** for the full stub dataclass code and rationale.
 
-#### 1.2 Key Methods to Implement
+### Phase 2: Translations & UI Polish
 
-```python
-async def async_step_user(self, user_input=None):
-    """Handle flow initialized by user."""
-    if user_input is not None:
-        if user_input.get("select_device"):
-            # User selected a discovered device: device info is already on self._discovered_device
-            # from the scan. Do NOT pass it through user_input.
-            return await self.async_step_user_confirm()
-        elif user_input.get("manual_entry"):
-            # User wants manual address entry, show manual form
-            return self.async_show_form(
-                step_id="user_manual",
-                data_schema=vol.Schema({
-                    vol.Required("address"): str,
-                    vol.Optional("name"): str,
-                })
-            )
-        else:
-            # Process user input and continue flow
-            # device info is already on self from the scan
-            return await self.async_step_user_confirm()
-    
-    # Show scan results
-    return self.async_show_form(
-        step_id="user",
-        data_schema=vol.Schema({
-            vol.Required("select_device"): selector({
-                "select": {
-                    "options": self._discovered_devices,
-                    "mode": "dropdown",
-                }
-            }),
-            vol.Optional("manual_entry"): bool,
-        }, extra_fields=[vol.Optional("description")])
-    )
+Add all manual-flow strings to `strings.json`:
+- `config.step.user.*` — title, description, address/name labels, manual entry button
+- `config.step.user_manual.*` — address field label, optional name label
+- `config.step.user_confirm.*` — confirmation title, description with placeholders
+- `config.error.*` — `invalid_address`, `connection_failed`
+- `config.abort.*` — `already_configured`, `no_devices_found`
 
-async def async_step_user_manual(self, user_input=None):
-    """Show manual address entry form."""
-    if user_input is not None:
-        # Validate address and store on self for later steps
-        self._discovered_device = await self._desk_validator.validate_address(
-            user_input["address"]
-        )
-        self._discovery_info = BluetoothServiceInfoBleak(
-            name=user_input.get("name", user_input["address"]),
-            address=user_input["address"],
-            ...
-        )
-        return await self.async_step_user_confirm()
+Apply UX polish:
+- `self._set_confirm_only()` on the confirm step so the back button is suppressed.
+- `self.context["title_placeholders"]` for entry title display.
+- Clear, user-facing error messages that do not expose internal stack traces.
+- Respect `BLEAK_TIMEOUT_SECONDS` (15s) for all connection attempts.
 
-    return self.async_show_form(
-        step_id="user_manual",
-        data_schema=vol.Schema({
-            vol.Required("address"): str,
-            vol.Optional("name"): str,
-        })
-    )
+### Phase 3: Testing
 
-async def async_step_user_confirm(self, user_input=None):
-    """Confirm device details.
-    
-    IMPORTANT: Device info comes from self attributes (set by prior steps),
-    NOT from user_input. user_input only carries what the user typed.
-    """
-    # Access discovered device info from self, not user_input
-    assert self._discovered_device is not None
-    device = self._discovered_device
-    assert self._discovery_info is not None
-    discovery_info = self._discovery_info
-    
-    if user_input is not None:
-        return self.async_create_entry(
-            title=discovery_info.name,
-            data={"address": discovery_info.address, "name": discovery_info.name},
-        )
+**Test scenarios:**
+1. Manual entry with a valid, in-range address → success, entities created
+2. Manual entry with invalid MAC format → form-level error, no connection attempt
+3. Manual entry with a valid-format address that is out of range → connection timeout error
+4. Attempt to configure the same device twice (unique ID = MAC) → `already_configured` abort
+5. Cancel during the flow → clean abort
+6. Discovery flow and manual flow converge on the same device → no conflict
 
-    self._set_confirm_only()
-    placeholders = {"name": discovery_info.name, "address": discovery_info.address}
-    self.context["title_placeholders"] = placeholders
-    return self.async_show_form(
-        step_id="user_confirm",
-        description_placeholders=placeholders,
-    )
-```
+**Testing steps:**
+1. Settings → Devices & Services → Add Integration → Uplift Desk
+2. Enter a valid Bluetooth address manually
+3. Verify device found, confirmation shown, config entry created
+4. Verify sensors and buttons appear
+5. Repeat with a second (duplicate) address → verify abort
 
-#### 1.3 Integration with Existing Code
+### Phase 4: Files & Checklist
 
-**Leverage Existing Components:**
-- Use `DeskValidator` to validate device connectivity
-- Store same structure as discovery flow: `{"address": ..., "name": ...}`
-- Use same `DiscoveredDesk` model class
-- Use same timeout constant `BLEAK_TIMEOUT_SECONDS`
+**Files to modify** (only these):
+1. `config_flow.py` — replace stub, add 3-step flow
+2. `strings.json` — add translations
+3. `manifest.json` — no changes (already has `config_flow: true`)
 
-**Unique ID Handling:**
-- Set unique ID to the MAC address (consistent with discovery flow)
-- Prevent duplicate configurations with `_abort_if_unique_id_configured()`
+**Pre-implementation review:**
+1. Confirm `DeskValidator.validate_device()` signature and return type
+2. Verify it works with a raw MAC via a `BLEDeviceProtocol` stub
+3. Review existing discovery flow tests — understand expected behavior to mirror
 
-### Phase 2: Data Model Alignment
-
-Ensure manual entry stores data identically to discovery:
-- Config entry data: `{"address": "XX:XX:XX:XX:XX:XX", "name": "Desk Name"}`
-- Unique ID: MAC address
-- Entry title: Device name
-
-### Phase 3: Translations
-
-Update `strings.json` to include manual flow translations:
-
-**strings.json additions:**
-- `config.step.user.title`: "Configure Uplift Desk"
-- `config.step.user.description`: "Enter the Bluetooth address of your Uplift Desk"
-- `config.step.user.data.address.name`: "Bluetooth Address"
-- `config.step.user.data.name.name`: "Device Name (Optional)"
-- `config.step.user_confirm.title`: "Confirm Device"
-- `config.step.user_confirm.description`: "Configure {name} at {address}"
-- `config.abort.no_devices_found`: "Device not found or not accessible"
-- `config.abort.already_configured`: "Device is already configured"
-
-### Phase 4: Testing Considerations
-
-**Test Scenarios:**
-1. Manual entry with valid address that is discoverable
-2. Manual entry with invalid address format
-3. Manual entry with address that is not in range
-4. Attempt to configure same device twice (already configured)
-5. Cancellation during the flow
-6. Integration with existing discovery flow (same device)
-
-**Testing Steps:**
-1. Access Home Assistant UI → Settings → Devices & Services
-2. Click "Add Integration" → "Uplift Desk"
-3. Enter a valid Bluetooth address
-4. Verify device is found and configuration completes
-5. Verify sensor and button entities are created
-
-### Phase 5: Required Files to Modify
-
-1. **config_flow.py**
-   - Modify `async_step_user` to support multi-step flow
-   - Add `async_step_user_confirm` method
-   - Implement device validation logic when user provides address
-
-2. **strings.json**
-   - Add translations for user and confirm steps
-   - Add abort reasons (no_devices_found, already_configured)
-
-3. **manifest.json** (no changes required)
-   - Already has `config_flow: true`
-
-### Phase 6: Dependencies
-
-- `uplift-ble` package (already declared in requirements)
-- `asyncio` for async operations
-- `homeassistant.components.bluetooth` for Bluetooth utilities
-- `voluptuous` for schema validation
-
-### Phase 7: Security Considerations
-
-- **Timeout Handling:** Connection attempts must respect `BLEAK_TIMEOUT_SECONDS` (15s)
-- **Error Messages:** Do not expose internal error details to user
-- **Input Validation:** Validate MAC address format before attempting connection
-
-### Phase 8: Pre-Implementation Tasks
-
-Before implementing, review the existing code:
-1. Read `desk_validator.py` to understand validation method signature
-2. Check if `DeskValidator.validate_device()` accepts address directly or requires `BluetoothServiceInfoBleak`
-3. Verify if device name can be retrieved post-discovery for manual entries
-4. Review existing discovery flow tests to understand expected behavior
+**Execution order:**
+1. Implement `async_step_user`, `async_step_user_manual`, `async_step_user_confirm`
+2. Add `BLEDeviceProtocol` stub dataclass
+3. Add MAC format validation helper
+4. Wire up `DeskValidator` calls with timeout and error handling
+5. Update `strings.json` with all translations
+6. Run existing test suite — verify no regression
+7. Add unit tests for manual flow (mock `DeskValidator`, test form logic)
+8. Test manually with actual hardware
 
 ### Manual Entry: Constructing a `BLEDeviceProtocol` Object
 
 The `DeskValidator.validate_device()` method (desk_validator.py:74) accepts a `BLEDeviceProtocol`, not a raw MAC address string. During manual entry, the user provides a MAC address as text (`"AA:BB:CC:DD:EE:FF"`), which must be wrapped into a `BLEDeviceProtocol`-compatible object before passing it to `DeskValidator`.
 
-**Why this matters:** The manual config flow (phase 1, step 1b) asks the user for a MAC address string via a text input. Meanwhile, `DeskValidator.validate_device()` expects a `BLEDeviceProtocol` object. The spec must document how to construct this object manually.
+**Why this matters:** The manual config flow (step 2) asks the user for a MAC address string via a text input. Meanwhile, `DeskValidator.validate_device()` expects a `BLEDeviceProtocol` object. The spec must document how to construct this object manually.
 
 **`BLEDeviceProtocol` definition** (ble_protos.py:40-45):
 ```python
@@ -361,27 +219,6 @@ manual_device = BluetoothServiceInfoBleak(
 **Important notes for implementation:**
 - The user's optional `name` input should be passed as the stub's `name` attribute, but if `DeskValidator` successfully connects, the real device name from the validated `DiscoveredDesk` should override it (since the user input may be incorrect or empty).
 - MAC address format validation should happen in the form schema (e.g., via a `Voluptuous` regex or a helper function), not rely on `DeskValidator` for this.
-
-### Implementation Sequence (Future Work)
-
-1. Implement `async_step_user` and `async_step_user_confirm` methods
-2. Add validation logic for manual address input
-3. Add connection attempt to verify device exists
-4. Add confirmation step with proper error handling
-5. Update strings.json with translations
-6. Run existing tests to ensure no regression
-7. Add tests for manual flow
-8. Test manually with actual hardware
-
-## Summary
-
-This plan outlines a 3-step user flow for manual configuration that mirrors the discovery flow's data structure and validation approach. The key is leveraging existing validation logic while providing a user-friendly interface for manual address entry.
-
-## Questions to Resolve
-
-1. Does `DeskValidator.validate_device()` work with manual address or only with `BluetoothServiceInfoBleak`?
-2. Can we retrieve device name from hardware for non-discoverable devices?
-3. What is the preferred behavior if device is found but not responding properly?
 
 ---
 **Status:** Plan ready for review and approval before code implementation.
