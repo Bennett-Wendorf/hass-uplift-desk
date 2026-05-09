@@ -11,6 +11,7 @@ from homeassistant.components.bluetooth import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (CONF_ADDRESS, Platform)
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryNotReady
 
 from .coordinator import (
     UpliftDeskBluetoothCoordinator,
@@ -30,7 +31,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: Uplift_Desk_DeskConfigEn
     if not ble_device:
         raise ConfigEntryNotReady(
             translation_domain=DOMAIN,
-            translation_key="device_not_found_error",
+            translation_key="no_device_found",
             translation_placeholders={"address": address},
         )
 

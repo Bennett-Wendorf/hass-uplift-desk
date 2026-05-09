@@ -2,12 +2,45 @@
     "config": {
         "step": {
             "confirm": {
-                "description": "[%key:common::config_flow::description::confirm_setup%]"
+                "bluetooth_description": "Confirm"
+            },
+            "user": {
+                "title": "Add Uplift Desk",
+                "description": "Choose how you want to add your desk.\n\nIf your desk is nearby and discoverable via Bluetooth, select it below. Otherwise, use manual entry to provide the address and name.",
+                "data": {
+                    "device": "Discoverable desk",
+                    "manual": "Manual entry"
+                }
+            },
+            "user_manual": {
+                "title": "Manual Desk Entry",
+                "description": "Enter the Bluetooth address and a name for your desk.",
+                "data": {
+                    "address": "Bluetooth Address",
+                    "name": "Desk Name"
+                }
+            },
+            "user_confirm": {
+                "title": "Confirm Desk Details",
+                "description": "Please confirm the details for your desk:\n\n**Name:** `{name}`\n**Address:** `{address}`"
             }
+        },
+        "error": {
+            "invalid_address": "Invalid Bluetooth address. Please enter a valid address (e.g., `AA:BB:CC:DD:EE:FF`).",
+            "connection_failed": "Failed to connect to the desk. Please ensure the desk is powered on and within range.",
+            "unknown_error": "An unexpected error occurred. Please try again."
         },
         "abort": {
             "single_instance_allowed": "[%key:common::config_flow::abort::single_instance_allowed%]",
-            "no_devices_found": "[%key:common::config_flow::abort::no_devices_found%]"
+            "no_devices_found": "[%key:common::config_flow::abort::no_devices_found%]",
+            "already_configured": "This desk is already configured.",
+            "connection_failed": "Failed to connect to the desk. Please ensure the desk is powered on and within range.",
+            "invalid_address": "The discovered device is not a supported desk."
+        }
+    },
+    "exceptions": {
+        "no_device_found": {
+            "message": "The device at address {address} is no longer available. Please try again or check if the device is in bluetooth range."
         }
     },
     "exceptions": {

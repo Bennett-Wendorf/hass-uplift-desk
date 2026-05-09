@@ -6,13 +6,17 @@ from collections.abc import Callable
 import logging
 import asyncio
 
-# TODO: Revert this back to installed uplift_ble package instead of local
-from .uplift_ble.desk_controller import DeskController
-from .uplift_ble.desk_validator import DeskValidator
-from .uplift_ble.desk_enums import DeskEventType
-from .uplift_ble.ble_protos import (
+from uplift_ble.desk_controller import DeskController
+from uplift_ble.desk_validator import DeskValidator
+from uplift_ble.desk_enums import DeskEventType
+from uplift_ble.ble_protos import (
     BLEClientProtocol,
     BLEDeviceProtocol
+)
+
+from homeassistant.components.bluetooth import (
+    BluetoothScanningMode,
+    BluetoothServiceInfoBleak,
 )
 
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
@@ -110,7 +114,7 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
 
             bleak_client_factory: Callable[..., BLEClientProtocol] = _generate_existing_client_factory(bleak_client)
             
-            validated_desk: DiscoveredDesk = await DeskValidator(bleak_client_factory).validate_device(self._discovered_desk)
+            validated_desk: DiscoveredDesk = await DeskValidator(bleak_client_factory).validate_device(self._discovered_desk, timeout=BLEAK_TIMEOUT_SECONDS)
 
             bleak_client = await establish_connection(
                 BleakClientWithServiceCache,
