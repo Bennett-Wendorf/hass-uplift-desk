@@ -13,6 +13,7 @@ from homeassistant.components.bluetooth import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (CONF_ADDRESS, Platform)
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryNotReady
 
 from .coordinator import (
     UpliftDeskBluetoothCoordinator,
