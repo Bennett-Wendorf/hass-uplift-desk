@@ -5,7 +5,8 @@ from .uplift_ble.desk_controller import DeskController
 from .uplift_ble.desk_validator import DeskValidator
 
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
-from .const import DOMAIN
+from .const import DOMAIN, BLEAK_TIMEOUT_SECONDS
+from .models import DiscoveredDesk
 
 from typing import Any
 
@@ -14,21 +15,17 @@ from homeassistant.components.bluetooth import (
     async_discovered_service_info,
 )
 
+import re
 import voluptuous as vol
 
 from homeassistant.helpers.selector import selector
-import re
 from dataclasses import dataclass
-
-
 @dataclass
 class _ManualBLEDevice:
     """BLEDeviceProtocol-compatible stub for manual entry."""
     address: str
     name: str | None = None
-
-
-def validate_mac_address(value: str) -> str:
+def _validate_mac_address(value: str) -> str:
     """Validate a MAC address string.
 
     Accepts two formats:
@@ -48,8 +45,6 @@ def validate_mac_address(value: str) -> str:
         return ":".join(value[i : i + 2] for i in range(0, 12, 2))
 
     raise vol.Invalid(f"invalid mac address: {value}")
-
-
 class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
     """Uplift Desk config flow."""
     # The schema version of the entries that it creates
@@ -60,25 +55,22 @@ class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
     def __init__(self) -> None:
         """Initialize the config flow."""
         self._discovery_info: BluetoothServiceInfoBleak | None = None
-        self._discovered_device: Desk | None = None
+        self._discovered_device: DiscoveredDesk | None = None
         self._discovered_devices: dict[
-            str, tuple[Desk, BluetoothServiceInfoBleak]
+            str, tuple[DiscoveredDesk, BluetoothServiceInfoBleak]
         ] = {}
         self._manual_address: str | None = None
         self._manual_name: str | None = None
 
     async def async_step_bluetooth(self, discovery_info: BluetoothServiceInfoBleak) -> ConfigFlowResult:
-        """Handle a discovered Bluetooth device."""
-
+        """Handle a flow initialized by Bluetooth discovery."""
         await self.async_set_unique_id(discovery_info.address)
         self._abort_if_unique_id_configured()
 
         self._discovery_info = discovery_info
-
         self._desk_validator = DeskValidator()
+        self._discovered_device = await self._desk_validator.validate_device(discovery_info, timeout=BLEAK_TIMEOUT_SECONDS)
 
-        self._discovered_device = await self._desk_validator.validate_device(discovery_info)
-        
         return await self.async_step_bluetooth_confirm()
 
     async def async_step_bluetooth_confirm(
@@ -102,38 +94,199 @@ class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="bluetooth_confirm", description_placeholders=placeholders
         )
 
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Handle a flow initialized by the user."""
+        # Get currently discovered Bluetooth devices
+        discovered = async_discovered_service_info(self.hass)
+
+        # Build options list from discovered devices
+        device_options: list[str] = []
+        for info in discovered:
+            name = info.name or info.address
+            device_options.append(name)
+
+        # Always include "Manual entry" as an option
+        device_options.append("Manual entry")
+
+        if user_input is not None:
+            selected = user_input["device"]
+
+            if selected == "Manual entry":
+                # Transition to manual entry step
+                return await self.async_step_user_manual()
+            else:
+                # Find the matching BluetoothServiceInfoBleak for the selected device
+                selected_info: BluetoothServiceInfoBleak | None = None
+                for info in discovered:
+                    info_name = info.name or info.address
+                    if info_name == selected:
+                        selected_info = info
+                        break
+
+                if selected_info is None:
+                    return self.async_show_form(
+                        step_id="user",
+                        data_schema=vol.Schema({
+                            vol.Required("device"): selector({
+                                "select": {
+                                    "options": device_options,
+                                },
+                            }),
+                        }),
+                        errors={"base": "no_device_found"},
+                    )
+
+                # Validate the selected device
+                self._desk_validator = DeskValidator()
+                try:
+                    validated = await self._desk_validator.validate_device(selected_info, timeout=BLEAK_TIMEOUT_SECONDS)
+                except (TimeoutError, Exception):
+                    return self.async_show_form(
+                        step_id="user",
+                        data_schema=vol.Schema({
+                            vol.Required("device"): selector({
+                                "select": {
+                                    "options": device_options,
+                                },
+                            }),
+                        }),
+                        errors={"base": "connection_failed"},
+                    )
+
+                if validated is None:
+                    return self.async_show_form(
+                        step_id="user",
+                        data_schema=vol.Schema({
+                            vol.Required("device"): selector({
+                                "select": {
+                                    "options": device_options,
+                                },
+                            }),
+                        }),
+                        errors={"base": "invalid_address"},
+                    )
+
+                # Device validated successfully - proceed to confirmation
+                await self.async_set_unique_id(selected_info.address)
+                self._abort_if_unique_id_configured()
+
+                self._discovery_info = selected_info
+                self._discovered_device = validated
+
+                return await self.async_step_user_confirm()
+
+        # If no devices discovered, skip straight to manual entry
+        if not device_options or device_options == ["Manual entry"]:
+            return await self.async_step_user_manual()
+
+        # Show the device selection form
+        return self.async_show_form(
+            step_id="user",
+            data_schema=vol.Schema({
+                vol.Required("device"): selector({
+                    "select": {
+                        "options": device_options,
+                    },
+                }),
+            }),
+        )
+
+    async def async_step_user_manual(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Handle manual Bluetooth address entry."""
+        if user_input is not None:
+            address = user_input["address"]
+            name = user_input.get("name")
+
+            # Validate MAC address format
+            try:
+                address = _validate_mac_address(address)
+            except vol.Invalid:
+                return self.async_show_form(
+                    step_id="user_manual",
+                    data_schema=vol.Schema({
+                        vol.Required("address"): str,
+                        vol.Optional("name"): str,
+                    }),
+                    errors={"base": "invalid_address"},
+                )
+
+            # Construct a BLEDeviceProtocol-compatible stub for manual entry
+            manual_device = _ManualBLEDevice(
+                address=address,
+                name=name if name else None,
+            )
+
+            # Validate the manually entered device
+            self._desk_validator = DeskValidator()
+            try:
+                validated = await self._desk_validator.validate_device(manual_device, timeout=BLEAK_TIMEOUT_SECONDS)
+            except (TimeoutError, Exception):
+                return self.async_show_form(
+                    step_id="user_manual",
+                    data_schema=vol.Schema({
+                        vol.Required("address"): str,
+                        vol.Optional("name"): str,
+                    }),
+                    errors={"base": "connection_failed"},
+                )
+
+            if validated is None:
+                return self.async_show_form(
+                    step_id="user_manual",
+                    data_schema=vol.Schema({
+                        vol.Required("address"): str,
+                        vol.Optional("name"): str,
+                    }),
+                    errors={"base": "invalid_address"},
+                )
+
+            # Validation succeeded - capture the real name from the validated device
+            await self.async_set_unique_id(validated.address)
+            self._abort_if_unique_id_configured()
+
+            self._discovered_device = validated
+            self._manual_address = validated.address
+            self._manual_name = validated.name
+
+            return await self.async_step_user_confirm()
+
+        # Show the manual entry form
+        return self.async_show_form(
+            step_id="user_manual",
+            data_schema=vol.Schema({
+                vol.Required("address"): str,
+                vol.Optional("name"): str,
+            }),
+        )
+
     async def async_step_user_confirm(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Confirm manual setup."""
-        assert self._manual_address is not None
-        assert self._manual_name is not None
-        address = self._manual_address
-        name = self._manual_name
+        """Confirm device details before creating the config entry."""
+        assert self._discovered_device is not None
+        device = self._discovered_device
+
+        # Determine the name and address to display
+        if self._manual_name:
+            name = self._manual_name
+            address = self._manual_address or device.address
+        else:
+            name = device.name
+            address = device.address
+
         if user_input is not None:
             return self.async_create_entry(
-                title=name, data={"address": address, "name": name}
+                title=name,
+                data={"address": address, "name": name},
             )
 
+        # This is a confirmation-only step - suppress the back button
         self._set_confirm_only()
-        placeholders = {"name": name}
+        placeholders = {"name": name, "address": address}
         self.context["title_placeholders"] = placeholders
         return self.async_show_form(
-            step_id="user_confirm", description_placeholders=placeholders
+            step_id="user_confirm",
+            description_placeholders=placeholders,
         )
-
-    async def async_step_user(self, user_input=None):
-        """Handle a flow initialized by the user."""
-        data_schema = {
-            vol.Required("test1"): str,
-            vol.Required("test2"): str
-        }
-
-        if self.show_advanced_options:
-            data_schema[vol.Optional("test3")] = selector({
-                "select": {
-                    "options": ["all", "light", "switch"],
-                }
-            })
-
-        return self.async_show_form(step_id="user", data_schema=vol.Schema(data_schema))

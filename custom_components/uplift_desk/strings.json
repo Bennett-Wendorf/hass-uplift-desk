@@ -32,7 +32,8 @@
         "error": {
             "invalid_address": "Invalid Bluetooth address. Please enter a valid address (e.g., `AA:BB:CC:DD:EE:FF`).",
             "connection_failed": "Failed to connect to the desk. Please ensure the desk is powered on and within range.",
-            "unknown_error": "An unexpected error occurred. Please try again."
+            "unknown_error": "An unexpected error occurred. Please try again.",
+            "no_device_found": "The selected device is no longer available. Please try again or use manual entry."
         },
         "abort": {
             "single_instance_allowed": "[%key:common::config_flow::abort::single_instance_allowed%]",
