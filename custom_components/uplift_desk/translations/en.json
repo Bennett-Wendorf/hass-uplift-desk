@@ -34,7 +34,9 @@
         "abort": {
             "single_instance_allowed": "[%key:common::config_flow::abort::single_instance_allowed%]",
             "no_devices_found": "[%key:common::config_flow::abort::no_devices_found%]",
-            "already_configured": "This desk is already configured."
+            "already_configured": "This desk is already configured.",
+            "connection_failed": "Failed to connect to the desk. Please ensure the desk is powered on and within range.",
+            "invalid_address": "The discovered device is not a supported desk."
         }
     },
     "entity": {
