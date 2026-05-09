@@ -8,6 +8,7 @@ from .const import DOMAIN
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryNotReady
 
 from .coordinator import (
     UpliftDeskBluetoothCoordinator,
@@ -20,6 +21,13 @@ _LOGGER = logging.getLogger(__name__)
 
 async def async_setup_entry(hass: HomeAssistant, entry: Uplift_Desk_DeskConfigEntry) -> bool:
     """Set up Uplift Desk from a config entry."""
+
+    if not entry.data["address"]:
+        raise ConfigEntryNotReady(
+            translation_domain=DOMAIN,
+            translation_key="no_device_found",
+            translation_placeholders={"address": entry.data["address"]}
+        )
 
     coordinator: UpliftDeskBluetoothCoordinator = UpliftDeskBluetoothCoordinator(hass, entry, entry.data["address"], entry.data["name"])
     entry.runtime_data = coordinator
