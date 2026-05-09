@@ -64,6 +64,8 @@ class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
         self._discovered_devices: dict[
             str, tuple[Desk, BluetoothServiceInfoBleak]
         ] = {}
+        self._manual_address: str | None = None
+        self._manual_name: str | None = None
 
     async def async_step_bluetooth(self, discovery_info: BluetoothServiceInfoBleak) -> ConfigFlowResult:
         """Handle a discovered Bluetooth device."""
@@ -98,6 +100,26 @@ class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
         self.context["title_placeholders"] = placeholders
         return self.async_show_form(
             step_id="bluetooth_confirm", description_placeholders=placeholders
+        )
+
+    async def async_step_user_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Confirm manual setup."""
+        assert self._manual_address is not None
+        assert self._manual_name is not None
+        address = self._manual_address
+        name = self._manual_name
+        if user_input is not None:
+            return self.async_create_entry(
+                title=name, data={"address": address, "name": name}
+            )
+
+        self._set_confirm_only()
+        placeholders = {"name": name}
+        self.context["title_placeholders"] = placeholders
+        return self.async_show_form(
+            step_id="user_confirm", description_placeholders=placeholders
         )
 
     async def async_step_user(self, user_input=None):
