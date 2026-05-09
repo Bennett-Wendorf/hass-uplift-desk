@@ -82,13 +82,13 @@ class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
                 f"Connection timeout while validating device {discovery_info.address}. "
                 f"If emulating a GATT service with a smartphone, try pairing first via Bluetooth settings."
             )
-            return None
+            return self.async_abort(reason="connection_failed")
         except Exception as e:
             logger.error(f"Unexpected error while validating device {discovery_info.address}: {e!r}")
-            return None
+            return self.async_abort(reason="connection_failed")
 
         if self._discovered_device is None:
-            return None
+            return self.async_abort(reason="invalid_address")
 
         return await self.async_step_bluetooth_confirm()
 
