@@ -17,8 +17,7 @@
                 "description": "Enter the Bluetooth address and a name for your desk.",
                 "data": {
                     "address": "Bluetooth Address",
-                    "name": "Desk Name",
-                    "address_data": "Bluetooth Address"
+                    "name": "Desk Name"
                 }
             },
             "user_confirm": {
