@@ -6,10 +6,9 @@ from collections.abc import Callable
 import logging
 import asyncio
 
-# TODO: Revert this back to installed uplift_ble package instead of local
-from .uplift_ble.desk_controller import DeskController
-from .uplift_ble.desk_validator import DeskValidator
-from .uplift_ble.desk_enums import DeskEventType
+from uplift_ble.desk_controller import DeskController
+from uplift_ble.desk_validator import DeskValidator
+from uplift_ble.desk_enums import DeskEventType
 
 from homeassistant.components.bluetooth import (
     BluetoothScanningMode,

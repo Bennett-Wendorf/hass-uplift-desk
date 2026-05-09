@@ -2,9 +2,8 @@
 
 import logging
 
-# TODO: Revert this back to installed uplift_ble package instead of local
-from .uplift_ble.desk_controller import DeskController
-from .uplift_ble.desk_validator import DeskValidator
+from uplift_ble.desk_controller import DeskController
+from uplift_ble.desk_validator import DeskValidator
 
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from .const import DOMAIN, BLEAK_TIMEOUT_SECONDS
