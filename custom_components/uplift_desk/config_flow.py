@@ -95,8 +95,6 @@ class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Confirm discovery."""
-        assert self._discovered_device is not None
-        device = self._discovered_device
         assert self._discovery_info is not None
         discovery_info = self._discovery_info
         title = discovery_info.name
