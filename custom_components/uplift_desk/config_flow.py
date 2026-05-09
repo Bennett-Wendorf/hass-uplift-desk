@@ -1,5 +1,7 @@
 """Config flow for the Uplift Desk integration."""
 
+import logging
+
 # TODO: Revert this back to installed uplift_ble package instead of local
 from .uplift_ble.desk_controller import DeskController
 from .uplift_ble.desk_validator import DeskValidator
@@ -20,6 +22,8 @@ import voluptuous as vol
 
 from homeassistant.helpers.selector import selector
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 @dataclass
 class _ManualBLEDevice:
     """BLEDeviceProtocol-compatible stub for manual entry."""
@@ -69,7 +73,22 @@ class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
 
         self._discovery_info = discovery_info
         self._desk_validator = DeskValidator()
-        self._discovered_device = await self._desk_validator.validate_device(discovery_info, timeout=BLEAK_TIMEOUT_SECONDS)
+        try:
+            self._discovered_device = await self._desk_validator.validate_device(
+                discovery_info, timeout=BLEAK_TIMEOUT_SECONDS
+            )
+        except TimeoutError:
+            logger.warning(
+                f"Connection timeout while validating device {discovery_info.address}. "
+                f"If emulating a GATT service with a smartphone, try pairing first via Bluetooth settings."
+            )
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error while validating device {discovery_info.address}: {e!r}")
+            return None
+
+        if self._discovered_device is None:
+            return None
 
         return await self.async_step_bluetooth_confirm()
 
@@ -136,11 +155,32 @@ class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
                         errors={"base": "no_device_found"},
                     )
 
+                # Check for duplicate before validation
+                await self.async_set_unique_id(selected_info.address)
+                self._abort_if_unique_id_configured()
+
                 # Validate the selected device
                 self._desk_validator = DeskValidator()
                 try:
                     validated = await self._desk_validator.validate_device(selected_info, timeout=BLEAK_TIMEOUT_SECONDS)
-                except (TimeoutError, Exception):
+                except TimeoutError:
+                    logger.warning(
+                        f"Connection timeout while validating device {selected_info.address}. "
+                        f"If emulating a GATT service with a smartphone, try pairing first via Bluetooth settings."
+                    )
+                    return self.async_show_form(
+                        step_id="user",
+                        data_schema=vol.Schema({
+                            vol.Required("device"): selector({
+                                "select": {
+                                    "options": device_options,
+                                },
+                            }),
+                        }),
+                        errors={"base": "connection_failed"},
+                    )
+                except Exception as e:
+                    logger.error(f"Unexpected error while validating device {selected_info.address}: {e!r}")
                     return self.async_show_form(
                         step_id="user",
                         data_schema=vol.Schema({
@@ -167,9 +207,6 @@ class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
                     )
 
                 # Device validated successfully - proceed to confirmation
-                await self.async_set_unique_id(selected_info.address)
-                self._abort_if_unique_id_configured()
-
                 self._discovery_info = selected_info
                 self._discovered_device = validated
 
@@ -218,11 +255,29 @@ class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
                 name=name if name else None,
             )
 
+            # Check for duplicate before validation
+            await self.async_set_unique_id(address)
+            self._abort_if_unique_id_configured()
+
             # Validate the manually entered device
             self._desk_validator = DeskValidator()
             try:
                 validated = await self._desk_validator.validate_device(manual_device, timeout=BLEAK_TIMEOUT_SECONDS)
-            except (TimeoutError, Exception):
+            except TimeoutError:
+                logger.warning(
+                    f"Connection timeout while validating device {address}. "
+                    f"If emulating a GATT service with a smartphone, try pairing first via Bluetooth settings."
+                )
+                return self.async_show_form(
+                    step_id="user_manual",
+                    data_schema=vol.Schema({
+                        vol.Required("address"): str,
+                        vol.Optional("name"): str,
+                    }),
+                    errors={"base": "connection_failed"},
+                )
+            except Exception as e:
+                logger.error(f"Unexpected error while validating device {address}: {e!r}")
                 return self.async_show_form(
                     step_id="user_manual",
                     data_schema=vol.Schema({
@@ -243,9 +298,6 @@ class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
                 )
 
             # Validation succeeded - capture the real name from the validated device
-            await self.async_set_unique_id(validated.address)
-            self._abort_if_unique_id_configured()
-
             self._discovered_device = validated
             self._manual_address = validated.address
             self._manual_name = validated.name
