@@ -17,6 +17,15 @@ from homeassistant.components.bluetooth import (
 import voluptuous as vol
 
 from homeassistant.helpers.selector import selector
+from dataclasses import dataclass
+
+@dataclass
+class _ManualBLEDevice:
+    """BLEDeviceProtocol-compatible stub for manual entry."""
+    address: str
+    name: str | None = None
+
+
 
 class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
     """Uplift Desk config flow."""
