@@ -17,7 +17,9 @@ from homeassistant.components.bluetooth import (
 import voluptuous as vol
 
 from homeassistant.helpers.selector import selector
+import re
 from dataclasses import dataclass
+
 
 @dataclass
 class _ManualBLEDevice:
@@ -25,6 +27,27 @@ class _ManualBLEDevice:
     address: str
     name: str | None = None
 
+
+def validate_mac_address(value: str) -> str:
+    """Validate a MAC address string.
+
+    Accepts two formats:
+      - AA:BB:CC:DD:EE:FF  (6 hex byte pairs, colon-separated)
+      - AABBCCDDEEFF        (12 hex characters, no separators)
+
+    Returns the normalized (uppercase) MAC address on success.
+    Raises vol.Invalid on failure.
+    """
+    value = str(value).strip().upper()
+
+    if re.fullmatch(r"[0-9A-F]{2}(:[0-9A-F]{2}){5}", value):
+        return value
+
+    if re.fullmatch(r"[0-9A-F]{12}", value):
+        # Normalize 12-char format to colon-separated
+        return ":".join(value[i : i + 2] for i in range(0, 12, 2))
+
+    raise vol.Invalid(f"invalid mac address: {value}")
 
 
 class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
