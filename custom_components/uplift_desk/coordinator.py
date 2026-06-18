@@ -8,7 +8,10 @@ import asyncio
 
 from uplift_ble.desk_controller import DeskController
 from uplift_ble.desk_validator import DeskValidator
-from uplift_ble.desk_enums import DeskEventType
+from uplift_ble.desk_enums import (
+    DeskEventType,
+    DeskUnit,
+)
 from uplift_ble.ble_protos import (
     BLEClientProtocol,
     BLEDeviceProtocol
@@ -40,13 +43,6 @@ from .models import DiscoveredDesk
 type Uplift_Desk_DeskConfigEntry = ConfigEntry[UpliftDeskBluetoothCoordinator]  # noqa: F821
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
-
-def convert_mm_to_in(millimeters: int | float) -> float:
-    """
-    Converts a value in millimeters to inches.
-    """
-    # 1 inch = 25.4 mm
-    return millimeters / 25.4
 
 def process_service_info(
     hass: HomeAssistant,
@@ -155,10 +151,19 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
             self._desk.client = None
 
     async def async_read_desk_height(self):
-        # await self.async_wake()
         await (await self._get_desk_controller()).request_height_limits()
-        self.height_in = convert_mm_to_in((await self._get_desk_controller()).height_mm)
-        return self.height_in
+        self.height_mm = (await self._get_desk_controller()).height_mm
+        return self.height_mm
+
+    async def async_read_desk_units(self):
+        await (await self._get_desk_controller()).request_units()
+        retrieved_unit = (await self._get_desk_controller()).unit
+        if retrieved_unit is None:
+            _LOGGER.warning("Could not retrieve units from desk, defaulting to centimeters")
+            retrieved_unit = DeskUnit.CENTIMETERS
+            (await self._get_desk_controller())._unit = DeskUnit.CENTIMETERS
+        self.keypad_display_units = retrieved_unit
+        return self.keypad_display_units
 
     async def async_preset_1(self):
         await self.async_wake()
@@ -172,6 +177,6 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         await (await self._get_desk_controller()).wake()
 
     def _async_height_notify_callback(self, height_mm: int):
-        _LOGGER.debug("Height notify callback received height: %d mm", height_mm)
-        self.height_in: int =  convert_mm_to_in(height_mm)
+        self.height_mm: int =  height_mm
+        _LOGGER.debug("Height notify callback received height: %d mm", self.height_mm)
         self.async_set_updated_data(self._desk)

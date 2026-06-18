@@ -40,6 +40,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: Uplift_Desk_DeskConfigEn
 
     await coordinator.async_connect()
 
+    await coordinator.async_read_desk_units()
     await coordinator.async_read_desk_height()
     coordinator.async_set_updated_data(coordinator._desk)
 
