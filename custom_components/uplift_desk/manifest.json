@@ -20,5 +20,5 @@
   "requirements": [
     "uplift-ble==0.5.2"
   ],
-  "version": "2.0.0-beta.1"
+  "version": "2.0.0-beta.2"
 }
