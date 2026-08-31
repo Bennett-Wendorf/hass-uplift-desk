@@ -65,10 +65,15 @@ This integration relies on the uplift-ble Python package, which can be found on 
 
 > Note: When using this project, no other device can be connected to the desk or it will be undiscoverable. This means that the Uplift Desk app needs to be either disconnected or closed for this application to work.
 
-The integration currently provides 3 entities:
+The integration currently provides 5 entities:
 1. A sensor for the current height of the desk. This will update automatically as your desk is moving, though it is not instantaneous and should not be relied on for safety.
 2. A button to move the desk to its configured preset 1.
 3. A button to move the desk to its configured preset 2.
+4. A disabled-by-default button to move supported desks to configured preset 3.
+5. A disabled-by-default button to move supported desks to configured preset 4.
+
+Preset 3 and 4 buttons are currently limited to the verified `0x00FF` and
+`0xFE60` desk profiles.
 
 
 <!-- Getting Started -->
