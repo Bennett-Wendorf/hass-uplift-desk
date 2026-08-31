@@ -7,10 +7,10 @@
         },
         "button":{
             "desk_preset_1":{
-                "default": "mdi:arrow-expand-down"
+                "default": "mdi:numeric-1-box-outline"
             },
             "desk_preset_2":{
-                "default": "mdi:arrow-expand-up"
+                "default": "mdi:numeric-2-box-outline"
             }
         }
     }
