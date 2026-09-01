@@ -11,6 +11,12 @@
             },
             "desk_preset_2":{
                 "default": "mdi:numeric-2-box-outline"
+            },
+            "desk_preset_3":{
+                "default": "mdi:numeric-3-box-outline"
+            },
+            "desk_preset_4":{
+                "default": "mdi:numeric-4-box-outline"
             }
         }
     }

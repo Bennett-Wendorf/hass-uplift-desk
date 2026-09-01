@@ -7,7 +7,9 @@ import logging
 import asyncio
 
 from uplift_ble.desk_controller import DeskController
+from uplift_ble.desk_configs import DeskVariant
 from uplift_ble.desk_validator import DeskValidator
+from uplift_ble.models import DiscoveredDesk as ValidatedDesk
 from uplift_ble.desk_enums import (
     DeskEventType,
     DeskUnit,
@@ -43,6 +45,11 @@ from .models import DiscoveredDesk
 type Uplift_Desk_DeskConfigEntry = ConfigEntry[UpliftDeskBluetoothCoordinator]  # noqa: F821
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
+
+_EXTENDED_PRESET_VARIANTS = {
+    DeskVariant.JIECANG_0x00FF,
+    DeskVariant.JIECANG_0xFE60,
+}
 
 def process_service_info(
     hass: HomeAssistant,
@@ -97,6 +104,7 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         self._discovered_desk = DiscoveredDesk(name=config_entry.title, address=desk_ble_device.address)
         self._desk_ble_device = desk_ble_device
         self._desk = None
+        self._desk_variant: DeskVariant | None = None
 
     async def _get_desk_controller(self):
         _LOGGER.debug("Getting desk controller for %s", self.desk_info)
@@ -110,7 +118,8 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
 
             bleak_client_factory: Callable[..., BLEClientProtocol] = _generate_existing_client_factory(bleak_client)
             
-            validated_desk: DiscoveredDesk = await DeskValidator(bleak_client_factory).validate_device(self._discovered_desk, timeout=BLEAK_TIMEOUT_SECONDS)
+            validated_desk: ValidatedDesk = await DeskValidator(bleak_client_factory).validate_device(self._discovered_desk, timeout=BLEAK_TIMEOUT_SECONDS)
+            self._desk_variant = validated_desk.desk_config.desk_variant
 
             bleak_client = await establish_connection(
                 BleakClientWithServiceCache,
@@ -138,6 +147,10 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
     @property
     def is_connected(self):
         return self._desk is not None and self._desk.client is not None and self._desk.client.is_connected
+
+    @property
+    def supports_extended_presets(self):
+        return self._desk_variant in _EXTENDED_PRESET_VARIANTS
 
     async def async_connect(self):
         await (await self._get_desk_controller()).start()
@@ -172,6 +185,14 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
     async def async_preset_2(self):
         await self.async_wake()
         await (await self._get_desk_controller()).move_to_height_preset_2()
+
+    async def async_preset_3(self):
+        await self.async_wake()
+        await (await self._get_desk_controller()).move_to_height_preset_3()
+
+    async def async_preset_4(self):
+        await self.async_wake()
+        await (await self._get_desk_controller()).move_to_height_preset_4()
 
     async def async_wake(self):
         await (await self._get_desk_controller()).wake()
