@@ -155,13 +155,35 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
     async def async_connect(self):
         await (await self._get_desk_controller()).start()
 
-    async def async_disconnect(self):
-        controller = await self._get_desk_controller()
-        await controller.stop()
+    async def async_disconnect(self) -> None:
+        """Disconnect an existing controller without establishing a new one."""
+        controller = self._desk
+        self._desk = None
+        if controller is None:
+            return
+
+        client = getattr(controller, "client", None)
         try:
-            await controller.client.disconnect()
+            await controller.stop()
+        except Exception:
+            _LOGGER.debug(
+                "Error stopping desk controller during unload for %s",
+                self.desk_info,
+                exc_info=True,
+            )
         finally:
-            self._desk.client = None
+            if client is not None:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    _LOGGER.debug(
+                        "Error disconnecting BLE client during unload for %s",
+                        self.desk_info,
+                        exc_info=True,
+                    )
+                finally:
+                    if getattr(controller, "client", None) is client:
+                        controller.client = None
 
     async def async_read_desk_height(self):
         await (await self._get_desk_controller()).request_height_limits()
