@@ -19,21 +19,9 @@ from uplift_ble.ble_protos import (
     BLEDeviceProtocol
 )
 
-from homeassistant.components.bluetooth import (
-    BluetoothScanningMode,
-    BluetoothServiceInfoBleak,
-)
-
-from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
-
-from homeassistant.helpers.update_coordinator import (
-    CoordinatorEntity,
-    DataUpdateCoordinator,
-    UpdateFailed,
-)
-
-from homeassistant.core import CoreState, HomeAssistant
-from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from bleak import BleakClient
 from bleak.backends.device import BLEDevice
@@ -42,43 +30,12 @@ from bleak_retry_connector import BleakClientWithServiceCache, establish_connect
 from .const import DOMAIN, BLEAK_TIMEOUT_SECONDS
 from .models import DiscoveredDesk
 
-type Uplift_Desk_DeskConfigEntry = ConfigEntry[UpliftDeskBluetoothCoordinator]  # noqa: F821
-
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
 _EXTENDED_PRESET_VARIANTS = {
     DeskVariant.JIECANG_0x00FF,
     DeskVariant.JIECANG_0xFE60,
 }
-
-def process_service_info(
-    hass: HomeAssistant,
-    entry: Uplift_Desk_DeskConfigEntry,
-    service_info: BluetoothServiceInfoBleak,
-) -> SensorUpdate:
-    """Process a BluetoothServiceInfoBleak, running side effects and returning sensor data."""
-    coordinator = entry.runtime_data
-    data = coordinator.device_data
-    update = data.update(service_info)
-    if not coordinator.model_info and (device_type := data.device_type):
-        hass.config_entries.async_update_entry(
-            entry, data={**entry.data, CONF_DEVICE_TYPE: device_type}
-        )
-        coordinator.set_model_info(device_type)
-    if update.events and hass.state is CoreState.running:
-        # Do not fire events on data restore
-        address = service_info.device.address
-        for event in update.events.values():
-            key = event.device_key.key
-            signal = format_event_dispatcher_name(address, key)
-            async_dispatcher_send(hass, signal)
-
-    return update
-
-
-def format_event_dispatcher_name(address: str, key: str) -> str:
-    """Format an event dispatcher name."""
-    return f"{DOMAIN}_{address}_{key}"
 
 def _generate_existing_client_factory(bleak_client: BleakClient) -> Callable[..., BLEClientProtocol]:
     def _existing_client_factory(
@@ -105,6 +62,10 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         self._desk_ble_device = desk_ble_device
         self._desk = None
         self._desk_variant: DeskVariant | None = None
+        self.height_mm: float | None = None
+        self.keypad_display_units = None
+        self._reconnect_task: "asyncio.Future | None" = None
+        self._intentional_disconnect: bool = False
 
     async def _get_desk_controller(self):
         _LOGGER.debug("Getting desk controller for %s", self.desk_info)
@@ -164,17 +125,19 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
             self._desk.client = None
 
     async def async_read_desk_height(self):
-        await (await self._get_desk_controller()).request_height_limits()
-        self.height_mm = (await self._get_desk_controller()).height_mm
+        controller = await self._get_desk_controller()
+        await controller.request_height_limits()
+        self.height_mm = controller.height_mm
         return self.height_mm
 
     async def async_read_desk_units(self):
-        await (await self._get_desk_controller()).request_units()
-        retrieved_unit = (await self._get_desk_controller()).unit
+        controller = await self._get_desk_controller()
+        await controller.request_units()
+        retrieved_unit = controller.unit
         if retrieved_unit is None:
             _LOGGER.warning("Could not retrieve units from desk, defaulting to centimeters")
             retrieved_unit = DeskUnit.CENTIMETERS
-            (await self._get_desk_controller())._unit = DeskUnit.CENTIMETERS
+            controller._unit = DeskUnit.CENTIMETERS
         self.keypad_display_units = retrieved_unit
         return self.keypad_display_units
 
@@ -201,3 +164,6 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         self.height_mm: int =  height_mm
         _LOGGER.debug("Height notify callback received height: %d mm", self.height_mm)
         self.async_set_updated_data(self._desk)
+
+
+type Uplift_Desk_DeskConfigEntry = ConfigEntry[UpliftDeskBluetoothCoordinator]  # noqa: F821
