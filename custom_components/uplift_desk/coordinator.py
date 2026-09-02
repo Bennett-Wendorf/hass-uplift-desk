@@ -37,6 +37,9 @@ class UpliftDeskServicesError(BleakError):
     """Raised when a connected client still lacks the required GATT characteristics."""
 
 
+_RECONNECT_BACKOFF_SECONDS: tuple[int, ...] = (5, 10, 20, 30)
+
+
 class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
     """Define the Update Coordinator."""
 
@@ -245,13 +248,43 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         self.hass.async_create_task(self._async_handle_unexpected_disconnect())
 
     async def _async_handle_unexpected_disconnect(self) -> None:
-        # Minimal handler for this task; Task 3 replaces the body with a bounded
-        # backoff reconnect loop (5s -> 10s -> 20s -> 30s cap, tracked task).
+        """Handle an unexpected link drop: tear down, then reconnect with backoff."""
         await self._stop_current_controller()
+        self._start_reconnect_loop()
+
+    def _start_reconnect_loop(self) -> None:
+        """Start the tracked reconnect task if one is not already running."""
+        if self._intentional_disconnect:
+            return
+        if self._reconnect_task is not None and not self._reconnect_task.done():
+            return  # a reconnect is already in progress
+        self._reconnect_task = self.hass.async_create_task(self._async_reconnect_loop())
+
+    async def _async_reconnect_loop(self) -> None:
+        """Retry the (re)connect cycle with capped backoff until success or unload."""
         try:
-            await self._establish_and_start()
-        except Exception:
-            _LOGGER.warning("Reconnect attempt failed; will retry on next trigger", exc_info=True)
+            backoff_index = 0
+            while not self._intentional_disconnect:
+                delay = _RECONNECT_BACKOFF_SECONDS[
+                    min(backoff_index, len(_RECONNECT_BACKOFF_SECONDS) - 1)
+                ]
+                await asyncio.sleep(delay)
+                if self._intentional_disconnect:
+                    return
+                try:
+                    await self._establish_and_start()
+                    _LOGGER.info("Reconnected to desk %s", self.desk_info)
+                    return
+                except Exception:
+                    _LOGGER.warning(
+                        "Reconnect attempt for %s failed; will retry with backoff",
+                        self.desk_info,
+                        exc_info=True,
+                    )
+                    backoff_index += 1
+        finally:
+            if self._reconnect_task is not None and self._reconnect_task.done():
+                self._reconnect_task = None
 
     @property
     def desk_name(self):
@@ -277,7 +310,15 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         await self._establish_and_start()
 
     async def async_disconnect(self) -> None:
+        """Tear down cleanly on unload: cancel reconnects, stop, disconnect, drop the controller."""
         self._intentional_disconnect = True
+        if self._reconnect_task is not None and not self._reconnect_task.done():
+            self._reconnect_task.cancel()
+            try:
+                await self._reconnect_task
+            except asyncio.CancelledError:
+                pass
+        self._reconnect_task = None
         await self._stop_current_controller()
 
     async def async_read_desk_height(self):
