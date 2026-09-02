@@ -5,6 +5,8 @@ import logging
 
 from .const import DOMAIN
 
+from bleak import BleakError
+
 from homeassistant.components.bluetooth import (
     async_ble_device_from_address
 )
@@ -38,10 +40,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: Uplift_Desk_DeskConfigEn
     coordinator: UpliftDeskBluetoothCoordinator = UpliftDeskBluetoothCoordinator(hass, entry, ble_device)
     entry.runtime_data = coordinator
 
-    await coordinator.async_connect()
+    try:
+        await coordinator.async_connect()
+        await coordinator.async_read_desk_units()
+        await coordinator.async_read_desk_height()
+    except (BleakError, TimeoutError) as err:
+        raise ConfigEntryNotReady(
+            translation_domain=DOMAIN,
+            translation_key="device_not_found_error",
+            translation_placeholders={"address": address},
+        ) from err
 
-    await coordinator.async_read_desk_units()
-    await coordinator.async_read_desk_height()
     coordinator.async_set_updated_data(coordinator._desk)
 
     _LOGGER.debug("Initializing Uplift Desk for desk %s: %s", entry.title, entry.data["address"])

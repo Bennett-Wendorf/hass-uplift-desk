@@ -41,6 +41,9 @@
     "exceptions": {
         "no_device_found": {
             "message": "The device at address {address} is no longer available. Please try again or check if the device is in bluetooth range."
+        },
+        "device_not_found_error": {
+            "message": "Could not find Uplift Desk with address {address}"
         }
     },
     "entity": {
