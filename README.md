@@ -65,6 +65,8 @@ This integration relies on the uplift-ble Python package, which can be found on 
 
 > Note: When using this project, no other device can be connected to the desk or it will be undiscoverable. This means that the Uplift Desk app needs to be either disconnected or closed for this application to work.
 
+> Normally, an advanced keypad with programmable buttons is required to use this integration (to set the presets the integration exposes). However, for users without an advanced keypad, the desk can still be programmed with preset values using the cli provided by the [uplift-ble](https://github.com/librick/uplift-ble) to set the preset values. 
+
 The integration currently provides 5 entities:
 1. A sensor for the current height of the desk. This will update automatically as your desk is moving, though it is not instantaneous and should not be relied on for safety.
 2. A button to move the desk to its configured preset 1.
