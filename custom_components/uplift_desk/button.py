@@ -58,6 +58,11 @@ class UpliftDeskPreset1Button(
         """Return information to link this entity with the correct device."""
         return {"identifiers": {(DOMAIN, self.coordinator.desk_address)}, "name": self.coordinator.desk_name}
 
+    @property
+    def available(self) -> bool:
+        """Return True if the desk is available."""
+        return self.coordinator.is_connected
+
     async def async_press(self) -> None:
         """Handle the button press."""
         await self.coordinator.async_preset_1()
@@ -84,6 +89,11 @@ class UpliftDeskPreset2Button(
     def device_info(self):
         """Return information to link this entity with the correct device."""
         return {"identifiers": {(DOMAIN, self.coordinator.desk_address)}, "name": self.coordinator.desk_name}
+
+    @property
+    def available(self) -> bool:
+        """Return True if the desk is available."""
+        return self.coordinator.is_connected
 
     async def async_press(self) -> None:
         """Handle the button press."""
@@ -113,6 +123,11 @@ class UpliftDeskPreset3Button(
         """Return information to link this entity with the correct device."""
         return {"identifiers": {(DOMAIN, self.coordinator.desk_address)}, "name": self.coordinator.desk_name}
 
+    @property
+    def available(self) -> bool:
+        """Return True if the desk is available."""
+        return self.coordinator.is_connected
+
     async def async_press(self) -> None:
         """Handle the button press."""
         await self.coordinator.async_preset_3()
@@ -140,6 +155,11 @@ class UpliftDeskPreset4Button(
     def device_info(self):
         """Return information to link this entity with the correct device."""
         return {"identifiers": {(DOMAIN, self.coordinator.desk_address)}, "name": self.coordinator.desk_name}
+
+    @property
+    def available(self) -> bool:
+        """Return True if the desk is available."""
+        return self.coordinator.is_connected
 
     async def async_press(self) -> None:
         """Handle the button press."""
