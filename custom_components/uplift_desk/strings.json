@@ -1,15 +1,14 @@
 {
     "config": {
         "step": {
-            "confirm": {
-                "bluetooth_description": "Confirm"
+            "bluetooth_confirm": {
+                "description": "Add the discovered desk `{name}`?"
             },
             "user": {
                 "title": "Add Uplift Desk",
                 "description": "Choose how you want to add your desk.\n\nIf your desk is nearby and discoverable via Bluetooth, select it below. Otherwise, use manual entry to provide the address and name.",
                 "data": {
-                    "device": "Discoverable desk",
-                    "manual": "Manual entry"
+                    "device": "Discoverable desk"
                 }
             },
             "user_manual": {
@@ -27,8 +26,7 @@
         },
         "error": {
             "invalid_address": "Invalid Bluetooth address. Please enter a valid address (e.g., `AA:BB:CC:DD:EE:FF`).",
-            "connection_failed": "Failed to connect to the desk. Please ensure the desk is powered on and within range.",
-            "unknown_error": "An unexpected error occurred. Please try again."
+            "connection_failed": "Failed to connect to the desk. Please ensure the desk is powered on and within range."
         },
         "abort": {
             "single_instance_allowed": "[%key:common::config_flow::abort::single_instance_allowed%]",
@@ -41,14 +39,17 @@
     "exceptions": {
         "no_device_found": {
             "message": "The device at address {address} is no longer available. Please try again or check if the device is in bluetooth range."
-        }
-    },
-    "exceptions": {
+        },
         "device_not_found_error": {
             "message": "Could not find Uplift Desk with address {address}"
         }
     },
     "entity": {
+        "sensor": {
+            "desk_height": {
+                "name": "Height"
+            }
+        },
         "button": {
             "desk_preset_1": {
                 "name": "Move to Preset 1"
