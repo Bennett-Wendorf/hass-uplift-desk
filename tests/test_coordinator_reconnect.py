@@ -244,6 +244,38 @@ async def test_drop_schedules_reconnect_and_restores_availability(
     assert fake_ble.establish.call_count == 2
 
 
+async def test_drop_notifies_listeners_so_entities_go_unavailable(
+    fake_ble, coordinator
+):
+    """An unexpected drop actively notifies coordinator listeners.
+
+    Regression: before the fix the disconnect handler only tore the
+    controller down and started reconnecting without pushing anything to the
+    coordinator's listeners, so entities (sensor + buttons) kept reporting
+    their stale ``available = True`` state until a successful reconnect
+    re-pushed data. The handler must call ``async_update_listeners()`` so
+    entities flip to unavailable immediately.
+    """
+    client = fake_ble.valid_client()
+    fake_ble.queue_client(client)
+    await coordinator.async_connect()
+
+    calls = []
+    coordinator.async_add_listener(lambda: calls.append(1))
+
+    # Simulate an unexpected link drop (the bleak watcher fires the callback)
+    # and let the disconnect handler run. Without the fix, the listener is
+    # never called and this times out.
+    client.simulate_disconnect()
+    await wait_until(lambda: len(calls) >= 1)
+
+    # A listener notification proves ``async_update_listeners()`` ran on the
+    # disconnect path — what makes the entities go unavailable right away.
+    assert len(calls) >= 1
+    assert coordinator._desk is None
+    assert coordinator.is_connected is False
+
+
 async def test_services_not_discovered_is_treated_as_invalid(fake_ble, coordinator):
     """A client whose services raise (discovery not performed) is recovered.
 
