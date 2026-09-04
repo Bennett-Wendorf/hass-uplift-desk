@@ -354,19 +354,15 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         return self.keypad_display_units
 
     async def async_preset_1(self):
-        await self.async_wake()
         await (await self._get_or_establish_controller()).move_to_height_preset_1()
 
     async def async_preset_2(self):
-        await self.async_wake()
         await (await self._get_or_establish_controller()).move_to_height_preset_2()
 
     async def async_preset_3(self):
-        await self.async_wake()
         await (await self._get_or_establish_controller()).move_to_height_preset_3()
 
     async def async_preset_4(self):
-        await self.async_wake()
         await (await self._get_or_establish_controller()).move_to_height_preset_4()
 
     async def async_wake(self):
