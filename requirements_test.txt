@@ -1,0 +1,16 @@
+# Test dependencies for the uplift_desk integration.
+#
+# pytest-homeassistant-custom-component provides the Home Assistant core test
+# harness (the `hass` fixture, MockConfigEntry, ...). 0.13.316 pins the
+# stable homeassistant==2026.2.3 release and is the newest version that still
+# supports Python 3.13 (the CI interpreter).
+pytest-homeassistant-custom-component==0.13.316
+
+# The integration's runtime requirement (mirrors manifest.json).
+uplift-ble==0.7.0
+
+# Optional Home Assistant component dependencies pulled in when importing
+# homeassistant.components.bluetooth (the coordinator's device lookup).
+aiousbwatcher
+pyserial
+serialx
