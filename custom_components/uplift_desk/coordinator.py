@@ -166,15 +166,24 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         self._desk = None
         if old is None:
             return
+
+        client = old.client
         try:
             await old.stop()
-        except BleakError as err:
-            _LOGGER.debug("Ignoring BleakError while stopping previous controller: %s", err)
-        if old.client is not None and old.client.is_connected:
-            try:
-                await old.client.disconnect()
-            except BleakError as err:
-                _LOGGER.debug("Ignoring BleakError while disconnecting previous client: %s", err)
+        except Exception:
+            _LOGGER.debug(
+                "Ignoring error while stopping previous controller",
+                exc_info=True,
+            )
+        finally:
+            if client is not None and client.is_connected:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    _LOGGER.debug(
+                        "Ignoring error while disconnecting previous client",
+                        exc_info=True,
+                    )
 
     async def _establish_and_start(self, refresh_state: bool = True) -> DeskController:
         """Run one (re)connect cycle: connect once, validate, start, refresh.
@@ -327,14 +336,16 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
     async def async_disconnect(self) -> None:
         """Tear down cleanly on unload: cancel reconnects, stop, disconnect, drop the controller."""
         self._intentional_disconnect = True
-        if self._reconnect_task is not None and not self._reconnect_task.done():
-            self._reconnect_task.cancel()
-            try:
-                await self._reconnect_task
-            except asyncio.CancelledError:
-                pass
+        reconnect_task = self._reconnect_task
         self._reconnect_task = None
-        await self._stop_current_controller()
+        try:
+            if reconnect_task is not None and not reconnect_task.done():
+                reconnect_task.cancel()
+                await asyncio.gather(reconnect_task, return_exceptions=True)
+        finally:
+            self._intentional_disconnect = True
+            self._reconnect_task = None
+            await self._stop_current_controller()
 
     async def async_read_desk_height(self):
         controller = await self._get_or_establish_controller()

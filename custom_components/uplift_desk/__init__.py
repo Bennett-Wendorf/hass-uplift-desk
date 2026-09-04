@@ -61,8 +61,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: Uplift_Desk_DeskConfigEn
 
 async def async_unload_entry(hass: HomeAssistant, entry: Uplift_Desk_DeskConfigEntry) -> bool:
     """Unload a config entry."""
-    coordinator: UpliftDeskBluetoothCoordinator = entry.runtime_data
+    coordinator: UpliftDeskBluetoothCoordinator | None = getattr(
+        entry, "runtime_data", None
+    )
 
-    await coordinator.async_disconnect()
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, _PLATFORMS)
 
-    return await hass.config_entries.async_unload_platforms(entry, _PLATFORMS)
+    if unload_ok and coordinator is not None:
+        await coordinator.async_disconnect()
+
+    return unload_ok
