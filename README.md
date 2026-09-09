@@ -1,6 +1,3 @@
-# hass-uplift-desk
-An integration for Home Assistant to control Uplift standing desks
-
 <!--
 *** This readme is inspired by the Best-README-Template available at https://github.com/othneildrew/Best-README-Template. Thanks to othneildrew for the inspiration!
 -->
