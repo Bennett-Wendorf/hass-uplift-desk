@@ -111,6 +111,10 @@ Contributions are what make the open source community such an amazing place to b
 
 If you find an issue in existing code, feel free to use the above procedure to generate a change, or open an [issue](https://github.com/Bennett-Wendorf/hass-uplift-desk/issues) for me to fix it.
 
+<!-- CONTRIBUTORS -->
+## Contributors
+
+[![Contributors](https://contrib.rocks/image?repo=Bennett-Wendorf/hass-uplift-desk)](https://github.com/Bennett-Wendorf/hass-uplift-desk/graphs/contributors)
 
 <!-- LICENSE -->
 ## License
