@@ -24,6 +24,7 @@ from uplift_ble.desk_enums import (
 from uplift_ble.models import DiscoveredDesk as ValidatedDesk
 
 from .models import DiscoveredDesk
+from .const import CONF_FALLBACK_UNIT, FALLBACK_UNIT_NONE
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
@@ -38,6 +39,17 @@ class UpliftDeskServicesError(BleakError):
 
 
 _RECONNECT_BACKOFF_SECONDS: tuple[int, ...] = (5, 10, 20, 30)
+
+
+def _parse_fallback_unit(value: str | None) -> DeskUnit | None:
+    """Parse an explicit fallback without guessing for invalid values."""
+    if value is None or value == FALLBACK_UNIT_NONE:
+        return None
+    try:
+        return DeskUnit(value)
+    except ValueError:
+        _LOGGER.warning("Ignoring invalid fallback unit: %s", value)
+        return None
 
 
 class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
@@ -57,6 +69,9 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         self._desk_ble_device = desk_ble_device
         self._desk = None
         self._desk_lock = asyncio.Lock()
+        self._fallback_unit = _parse_fallback_unit(
+            config_entry.options.get(CONF_FALLBACK_UNIT)
+        )
         self._desk_variant: DeskVariant | None = None
         self.height_mm: float | None = None
         self.keypad_display_units = None
@@ -236,7 +251,7 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
                     address=self.desk_address,
                     name=self.desk_name,
                     desk_config=desk_config,
-                ).create_controller(client)
+                ).create_controller(client, fallback_unit=self._fallback_unit)
                 controller.on(DeskEventType.HEIGHT, self._async_height_notify_callback)
                 await controller.start()  # EXACTLY ONCE, on the fresh controller
                 if self._intentional_disconnect:
@@ -398,9 +413,11 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         await controller.request_units()
         retrieved_unit = controller.unit
         if retrieved_unit is None:
-            _LOGGER.warning("Could not retrieve units from desk, defaulting to centimeters")
-            retrieved_unit = DeskUnit.CENTIMETERS
-            controller._unit = DeskUnit.CENTIMETERS
+            retrieved_unit = self._fallback_unit
+            if retrieved_unit is None:
+                _LOGGER.warning("Desk did not report units and no fallback is configured")
+            else:
+                _LOGGER.warning("Desk did not report units; using configured %s fallback", retrieved_unit.value)
         self.keypad_display_units = retrieved_unit
         return self.keypad_display_units
 

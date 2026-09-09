@@ -1,12 +1,26 @@
 """Config flow for the Uplift Desk integration."""
 
+from __future__ import annotations
+
 import logging
 
 from uplift_ble.desk_controller import DeskController
 from uplift_ble.desk_validator import DeskValidator
 
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
-from .const import DOMAIN, BLEAK_TIMEOUT_SECONDS
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
+from homeassistant.core import callback
+from .const import (
+    DOMAIN,
+    BLEAK_TIMEOUT_SECONDS,
+    CONF_FALLBACK_UNIT,
+    FALLBACK_UNIT_NONE,
+)
+from uplift_ble.desk_enums import DeskUnit
 from .models import DiscoveredDesk
 
 from typing import Any
@@ -19,7 +33,12 @@ from homeassistant.components.bluetooth import (
 import re
 import voluptuous as vol
 
-from homeassistant.helpers.selector import selector
+from homeassistant.helpers.selector import (
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+    selector,
+)
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -53,7 +72,7 @@ class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
     # The schema version of the entries that it creates
     # Home Assistant will call your migrate method if the version changes
     VERSION = 1
-    MINOR_VERSION = 1
+    MINOR_VERSION = 2
 
     def __init__(self) -> None:
         """Initialize the config flow."""
@@ -64,6 +83,12 @@ class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
         ] = {}
         self._manual_address: str | None = None
         self._manual_name: str | None = None
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> UpliftDeskOptionsFlow:
+        """Return the options flow handler."""
+        return UpliftDeskOptionsFlow(config_entry)
 
     async def async_step_bluetooth(self, discovery_info: BluetoothServiceInfoBleak) -> ConfigFlowResult:
         """Handle a flow initialized by Bluetooth discovery."""
@@ -338,4 +363,44 @@ class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="user_confirm",
             description_placeholders=placeholders,
+        )
+
+
+class UpliftDeskOptionsFlow(OptionsFlow):
+    """Configure height interpretation when the desk does not report units."""
+
+    def __init__(self, config_entry: ConfigEntry) -> None:
+        """Retain the entry for Home Assistant versions without config_entry."""
+        self._config_entry = config_entry
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Show and save the fallback height unit."""
+        if user_input is not None:
+            return self.async_create_entry(
+                title="", data={**self._config_entry.options, **user_input}
+            )
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_FALLBACK_UNIT,
+                        default=self._config_entry.options.get(
+                            CONF_FALLBACK_UNIT, FALLBACK_UNIT_NONE
+                        ),
+                    ): SelectSelector(
+                        SelectSelectorConfig(
+                            options=[
+                                FALLBACK_UNIT_NONE,
+                                DeskUnit.CENTIMETERS.value,
+                                DeskUnit.INCHES.value,
+                            ],
+                            mode=SelectSelectorMode.DROPDOWN,
+                            translation_key="fallback_unit",
+                        )
+                    ),
+                }
+            ),
         )
