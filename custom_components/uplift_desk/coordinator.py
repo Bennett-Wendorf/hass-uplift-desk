@@ -8,6 +8,7 @@ import logging
 from homeassistant.components.bluetooth import async_ble_device_from_address
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from bleak import BleakError
@@ -19,6 +20,7 @@ from uplift_ble.desk_configs import DESK_CONFIGS_BY_SERVICE, DeskConfig, DeskVar
 from uplift_ble.desk_controller import DeskController
 from uplift_ble.desk_enums import (
     DeskEventType,
+    DeskLockStatus,
     DeskUnit,
 )
 from uplift_ble.models import DiscoveredDesk as ValidatedDesk
@@ -36,6 +38,14 @@ _EXTENDED_PRESET_VARIANTS = {
 
 class UpliftDeskServicesError(BleakError):
     """Raised when a connected client still lacks the required GATT characteristics."""
+
+
+class UpliftDeskMoveInFlightError(HomeAssistantError):
+    """Raised when a move command is already in flight for the desk."""
+
+
+class UpliftDeskLockedError(HomeAssistantError):
+    """Raised when the desk is locked and cannot be moved."""
 
 
 _RECONNECT_BACKOFF_SECONDS: tuple[int, ...] = (5, 10, 20, 30)
@@ -450,6 +460,40 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
 
     async def async_wake(self):
         await (await self._get_or_establish_controller()).wake()
+
+    async def async_move_to_height(self, height_mm: int | float) -> None:
+        """Command the desk to move to a specific height (mm).
+
+        At most one move command may be in flight (coalescing, below);
+        a second concurrent set raises UpliftDeskMoveInFlightError.
+        Raises UpliftDeskLockedError if the desk last reported LOCKED.
+        """
+        # Reject (not queue) a second concurrent set: the check-and-set below
+        # has no await between them, so it is race-free on the HA event loop.
+        if self._move_in_flight:
+            raise UpliftDeskMoveInFlightError(
+                f"A move command for desk {self.desk_info} is still in flight; try again shortly"
+            )
+        self._move_in_flight = True
+        try:
+            controller = await self._get_or_establish_controller()
+            if controller.lock_status is DeskLockStatus.LOCKED:
+                raise UpliftDeskLockedError(
+                    f"Desk {self.desk_info} is locked; unlock it before moving"
+                )
+            # A lock_status of None means the desk has not reported one since
+            # connect; proceed — the firmware rejects a move if truly locked.
+            target_mm = int(round(height_mm))
+            await controller.move_to_specified_height(target_mm)
+            # HA has already validated the value against the number's
+            # min/max before this call. The desk replies with live HEIGHT
+            # notifications as it moves, which flow through the existing
+            # height callback — no state update is needed here.
+            _LOGGER.debug(
+                "Commanded desk %s to move to %d mm", self.desk_info, target_mm
+            )
+        finally:
+            self._move_in_flight = False
 
     def _async_height_notify_callback(self, height_mm: int):
         self.height_mm: int =  height_mm
