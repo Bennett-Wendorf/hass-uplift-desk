@@ -74,6 +74,9 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         )
         self._desk_variant: DeskVariant | None = None
         self.height_mm: float | None = None
+        self.height_limit_min_mm: int | None = None
+        self.height_limit_max_mm: int | None = None
+        self._move_in_flight: bool = False
         self.keypad_display_units = None
         self._reconnect_task: "asyncio.Future | None" = None
         self._intentional_disconnect: bool = False
@@ -253,6 +256,18 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
                     desk_config=desk_config,
                 ).create_controller(client, fallback_unit=self._fallback_unit)
                 controller.on(DeskEventType.HEIGHT, self._async_height_notify_callback)
+                controller.on(
+                    DeskEventType.HEIGHT_LIMITS_CONFIGURATION,
+                    self._async_height_limits_configuration_callback,
+                )
+                controller.on(
+                    DeskEventType.HEIGHT_LIMIT_MAX,
+                    self._async_height_limit_max_callback,
+                )
+                controller.on(
+                    DeskEventType.HEIGHT_LIMIT_MIN,
+                    self._async_height_limit_min_callback,
+                )
                 await controller.start()  # EXACTLY ONCE, on the fresh controller
                 if self._intentional_disconnect:
                     raise RuntimeError("Desk coordinator is disconnecting")
@@ -439,6 +454,26 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
     def _async_height_notify_callback(self, height_mm: int):
         self.height_mm: int =  height_mm
         _LOGGER.debug("Height notify callback received height: %d mm", self.height_mm)
+        self.async_set_updated_data(self._desk)
+
+    def _async_height_limits_configuration_callback(self, max_mm: int, min_mm: int) -> None:
+        self.height_limit_max_mm = max_mm
+        self.height_limit_min_mm = min_mm
+        _LOGGER.debug(
+            "Height limits configuration callback received max: %d mm, min: %d mm",
+            max_mm,
+            min_mm,
+        )
+        self.async_set_updated_data(self._desk)
+
+    def _async_height_limit_max_callback(self, max_mm: int) -> None:
+        self.height_limit_max_mm = max_mm
+        _LOGGER.debug("Height limit max callback received max: %d mm", max_mm)
+        self.async_set_updated_data(self._desk)
+
+    def _async_height_limit_min_callback(self, min_mm: int) -> None:
+        self.height_limit_min_mm = min_mm
+        _LOGGER.debug("Height limit min callback received min: %d mm", min_mm)
         self.async_set_updated_data(self._desk)
 
 
