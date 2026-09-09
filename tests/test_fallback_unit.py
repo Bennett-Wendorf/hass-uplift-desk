@@ -184,8 +184,9 @@ async def test_changed_options_reload_real_entry(hass, fake_ble):
         await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_new_entry_has_no_fallback(hass, fake_ble, monkeypatch):
-    """The existing manual flow creates version 1.2 without an implicit unit."""
+@pytest.mark.parametrize("selection", ["none", "centimeters", "inches"])
+async def test_setup_flow_captures_fallback_unit(hass, fake_ble, monkeypatch, selection):
+    """The manual setup flow captures the fallback unit into entry options."""
     monkeypatch.setattr(
         "custom_components.uplift_desk.config_flow.async_discovered_service_info",
         lambda hass: [],
@@ -203,12 +204,16 @@ async def test_new_entry_has_no_fallback(hass, fake_ble, monkeypatch):
             result["flow_id"], user_input={CONF_ADDRESS: DESK_ADDRESS, "name": DESK_NAME}
         )
         assert result["step_id"] == "user_confirm"
-        result = await hass.config_entries.flow.async_configure(result["flow_id"], user_input={})
+        # The confirm step now offers the fallback unit, defaulting to none.
+        assert result["data_schema"]({}) == {CONF_FALLBACK_UNIT: FALLBACK_UNIT_NONE}
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], user_input={CONF_FALLBACK_UNIT: selection}
+        )
         await hass.async_block_till_done()
     assert result["type"] is FlowResultType.CREATE_ENTRY
     entry = result["result"]
     assert (entry.version, entry.minor_version) == (1, 2)
-    assert await async_migrate_entry(hass, entry)
-    assert CONF_FALLBACK_UNIT not in entry.options
+    assert entry.options == {CONF_FALLBACK_UNIT: selection}
+    # The options flow now defaults to the value captured during setup.
     result = await hass.config_entries.options.async_init(entry.entry_id)
-    assert result["data_schema"]({}) == {CONF_FALLBACK_UNIT: FALLBACK_UNIT_NONE}
+    assert result["data_schema"]({}) == {CONF_FALLBACK_UNIT: selection}

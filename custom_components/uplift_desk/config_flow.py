@@ -67,6 +67,28 @@ def _validate_mac_address(value: str) -> str:
         return ":".join(value[i : i + 2] for i in range(0, 12, 2))
 
     raise vol.Invalid(f"invalid mac address: {value}")
+
+def _fallback_unit_schema(default: str = FALLBACK_UNIT_NONE) -> vol.Schema:
+    """Build the fallback height unit selector schema."""
+    return vol.Schema(
+        {
+            vol.Required(
+                CONF_FALLBACK_UNIT,
+                default=default,
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    options=[
+                        FALLBACK_UNIT_NONE,
+                        DeskUnit.CENTIMETERS.value,
+                        DeskUnit.INCHES.value,
+                    ],
+                    mode=SelectSelectorMode.DROPDOWN,
+                    translation_key="fallback_unit",
+                )
+            ),
+        }
+    )
+
 class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
     """Uplift Desk config flow."""
     # The schema version of the entries that it creates
@@ -125,14 +147,18 @@ class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
         title = discovery_info.name
         if user_input is not None:
             return self.async_create_entry(
-                title=title, data={"address": discovery_info.address, "name": discovery_info.name}
+                title=title,
+                data={"address": discovery_info.address, "name": discovery_info.name},
+                options={CONF_FALLBACK_UNIT: user_input[CONF_FALLBACK_UNIT]},
             )
 
         self._set_confirm_only()
         placeholders = {"name": title}
         self.context["title_placeholders"] = placeholders
         return self.async_show_form(
-            step_id="bluetooth_confirm", description_placeholders=placeholders
+            step_id="bluetooth_confirm",
+            data_schema=_fallback_unit_schema(),
+            description_placeholders=placeholders,
         )
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
@@ -354,6 +380,7 @@ class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
             return self.async_create_entry(
                 title=name,
                 data={"address": address, "name": name},
+                options={CONF_FALLBACK_UNIT: user_input[CONF_FALLBACK_UNIT]},
             )
 
         # This is a confirmation-only step - suppress the back button
@@ -362,6 +389,7 @@ class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
         self.context["title_placeholders"] = placeholders
         return self.async_show_form(
             step_id="user_confirm",
+            data_schema=_fallback_unit_schema(),
             description_placeholders=placeholders,
         )
 
@@ -383,24 +411,9 @@ class UpliftDeskOptionsFlow(OptionsFlow):
             )
         return self.async_show_form(
             step_id="init",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(
-                        CONF_FALLBACK_UNIT,
-                        default=self._config_entry.options.get(
-                            CONF_FALLBACK_UNIT, FALLBACK_UNIT_NONE
-                        ),
-                    ): SelectSelector(
-                        SelectSelectorConfig(
-                            options=[
-                                FALLBACK_UNIT_NONE,
-                                DeskUnit.CENTIMETERS.value,
-                                DeskUnit.INCHES.value,
-                            ],
-                            mode=SelectSelectorMode.DROPDOWN,
-                            translation_key="fallback_unit",
-                        )
-                    ),
-                }
+            data_schema=_fallback_unit_schema(
+                default=self._config_entry.options.get(
+                    CONF_FALLBACK_UNIT, FALLBACK_UNIT_NONE
+                )
             ),
         )
