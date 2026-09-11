@@ -465,14 +465,18 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         """Command the desk to move to a specific height (mm).
 
         At most one move command may be in flight (coalescing, below);
-        a second concurrent set raises UpliftDeskMoveInFlightError.
+        a second concurrent set raises UpliftDeskMoveInFlightError. The
+        in-flight window covers the command write plus any (re)connect
+        cycle needed to reach a disconnected desk, so it can last well
+        longer than the BLE write itself.
         Raises UpliftDeskLockedError if the desk last reported LOCKED.
         """
         # Reject (not queue) a second concurrent set: the check-and-set below
         # has no await between them, so it is race-free on the HA event loop.
         if self._move_in_flight:
             raise UpliftDeskMoveInFlightError(
-                f"A move command for desk {self.desk_info} is still in flight; try again shortly"
+                f"A move command for desk {self.desk_info} is in flight, or the desk is "
+                "reconnecting; try again shortly"
             )
         self._move_in_flight = True
         try:
