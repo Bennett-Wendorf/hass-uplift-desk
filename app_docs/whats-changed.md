@@ -4,6 +4,11 @@ If you are upgrading the Uplift Desk integration, here is what improves for
 you. No configuration changes are required — existing setups keep working as
 they are.
 
+- **Height Setpoint: move the desk to any height.** A new **Height Setpoint**
+  number entity lets you command the desk to move to any height you type in —
+  not just the four presets. The entity shows the desk's current height, and
+  its allowed range follows the desk's configured height limits.
+
 - **Automatic reconnection.** The desk now reconnects by itself after a
   Bluetooth (BLE) drop. Previously, once the link fell the desk stayed "dead
   but connected" until you restarted Home Assistant or reloaded the
@@ -32,4 +37,5 @@ they are.
 
 For details on the reconnect timeline and how to read the new log lines, see
 [Disconnect & Reconnect Behavior](disconnect-reconnect-behavior.md) and
-[Troubleshooting](troubleshooting.md).
+[Troubleshooting](troubleshooting.md). For the new Height Setpoint entity,
+see [Setting a Custom Height](setting-a-custom-height.md).
