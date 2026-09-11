@@ -57,8 +57,7 @@ class DeskHeightSetpointNumber(
             mode=NumberMode.BOX,
         )
         self._attr_unique_id = f"{coordinator.desk_address}_{self.entity_description.key}"
-        self._attr_native_min_value = DEFAULT_HEIGHT_LIMIT_MIN_MM
-        self._attr_native_max_value = DEFAULT_HEIGHT_LIMIT_MAX_MM
+        self._attr_native_min_value, self._attr_native_max_value = self._effective_limits()
         self._attr_native_value = coordinator.height_mm
 
     @property
