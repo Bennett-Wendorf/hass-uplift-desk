@@ -8,6 +8,7 @@ import logging
 from homeassistant.components.bluetooth import async_ble_device_from_address
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from bleak import BleakError
@@ -16,7 +17,7 @@ from bleak_retry_connector import BleakClientWithServiceCache, establish_connect
 from bleak_retry_connector.bluez import clear_cache
 
 from uplift_ble.desk_configs import DESK_CONFIGS_BY_SERVICE, DeskConfig, DeskVariant
-from uplift_ble.desk_controller import DeskController
+from uplift_ble.desk_controller import DeskController, command_writer
 from uplift_ble.desk_enums import (
     DeskEventType,
     DeskUnit,
@@ -71,6 +72,8 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         self._desk_ble_device = desk_ble_device
         self._desk = None
         self._desk_lock = asyncio.Lock()
+        self._motion_write_lock = asyncio.Lock()
+        self._motion_generation = 0
         self._fallback_unit = _parse_fallback_unit(
             config_entry.options.get(CONF_FALLBACK_UNIT)
         )
@@ -386,6 +389,7 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
     async def async_disconnect(self) -> None:
         """Tear down cleanly on unload: cancel reconnects, stop, disconnect, drop the controller."""
         self._intentional_disconnect = True
+        self._motion_generation += 1
         reconnect_task = self._reconnect_task
         self._reconnect_task = None
         try:
@@ -424,16 +428,55 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         return self.keypad_display_units
 
     async def async_preset_1(self):
-        await (await self._get_or_establish_controller()).move_to_height_preset_1()
+        await self._async_recall_preset(1)
 
     async def async_preset_2(self):
-        await (await self._get_or_establish_controller()).move_to_height_preset_2()
+        await self._async_recall_preset(2)
 
     async def async_preset_3(self):
-        await (await self._get_or_establish_controller()).move_to_height_preset_3()
+        await self._async_recall_preset(3)
 
     async def async_preset_4(self):
-        await (await self._get_or_establish_controller()).move_to_height_preset_4()
+        await self._async_recall_preset(4)
+
+    async def _async_recall_preset(self, slot: int) -> None:
+        """Discard a pending recall if Stop or unload supersedes it."""
+        generation = self._motion_generation
+        controller = await self._get_or_establish_controller()
+        # Preserve 0.7.0's wake sequence outside the final-write lock, so a
+        # slow wake or reconnect cannot hold Stop behind a later motion write.
+        if controller.requires_wake:
+            for _ in range(3):
+                if generation != self._motion_generation or self._intentional_disconnect:
+                    return
+                await controller.wake()
+                await asyncio.sleep(0.1)
+        async with self._motion_write_lock:
+            if generation != self._motion_generation or self._intentional_disconnect:
+                return
+            await self._async_command_only(controller, f"move_to_height_preset_{slot}")
+
+    @staticmethod
+    async def _async_command_only(controller: DeskController, name: str) -> None:
+        """Keep the library's packet definition while omitting wake and waits."""
+        definition = getattr(DeskController, name).__wrapped__
+        await command_writer(skip_wake=True)(definition)(controller)
+
+    async def async_stop_movement(self) -> None:
+        """Cancel pending recalls and send Stop only on the existing connection."""
+        self._motion_generation += 1
+        async with self._motion_write_lock:
+            if self._intentional_disconnect or not self.is_connected:
+                raise HomeAssistantError(
+                    "Desk is not connected; pending presets were cancelled, "
+                    "but no Stop packet was sent. Use the desk keypad."
+                )
+            try:
+                await self._async_command_only(self._desk, "stop_movement")
+            except (BleakError, TimeoutError) as err:
+                raise HomeAssistantError(
+                    "Could not send Stop to the desk. Use the desk keypad."
+                ) from err
 
     async def async_wake(self):
         await (await self._get_or_establish_controller()).wake()

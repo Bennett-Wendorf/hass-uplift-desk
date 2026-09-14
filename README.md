@@ -100,6 +100,24 @@ keypad's units or move the desk.
 
 
 <!-- CONTRIBUTING -->
+### Stop Movement
+
+The `uplift_desk.stop` action stops one configured desk and cancels its pending
+preset recalls. Select the desk using `config_entry_id`; no extra entity or
+height reading is required.
+
+```yaml
+action: uplift_desk.stop
+data:
+  config_entry_id: YOUR_DESK_CONFIG_ENTRY_ID
+```
+
+Stop uses the existing Bluetooth connection and skips wake packets and
+notification waits. If the desk is disconnected, the action reports that no
+Stop packet was sent and does not queue a delayed Stop for a later reconnect.
+An explicit preset request made after Stop can still move the desk. Keep the
+physical keypad available; Bluetooth Stop is not an emergency-stop circuit.
+
 ## Contributing
 
 Contributions are what make the open source community such an amazing place to be learn, inspire, and create. Any contributions you make are **greatly appreciated**.
