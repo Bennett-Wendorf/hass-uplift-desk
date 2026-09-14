@@ -160,26 +160,44 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         return None
 
     async def _clear_cache_and_discard(self, client) -> None:
-        """Best-effort: clear the stack service cache and discard the client."""
+        """Clear the selected backend's cache before discarding its client."""
+        cleared = False
         try:
-            cleared = await clear_cache(self.desk_address)
+            clear_client_cache = getattr(client, "clear_cache", None)
+            if callable(clear_client_cache):
+                try:
+                    # ESPHome clears its on-device cache through this API and
+                    # requires the BLE connection to still be active.
+                    cleared = await clear_client_cache()
+                except Exception:
+                    _LOGGER.debug(
+                        "Could not clear the client's service cache for %s",
+                        self.desk_address,
+                        exc_info=True,
+                    )
+            if not cleared:
+                try:
+                    # Retain recovery for local BlueZ clients without the
+                    # backend extension. This does not address ESP32 caches.
+                    cleared = await clear_cache(self.desk_address)
+                except Exception:
+                    _LOGGER.debug(
+                        "Could not clear BlueZ cache for %s (best-effort)",
+                        self.desk_address,
+                        exc_info=True,
+                    )
             _LOGGER.warning(
-                "Cleared bleak_retry_connector service cache for %s (cleared=%s)",
+                "Service cache clear for %s (cleared=%s)",
                 self.desk_address,
                 cleared,
             )
-        except Exception:
-            _LOGGER.debug(
-                "Could not clear service cache for %s (best-effort)",
-                self.desk_address,
-                exc_info=True,
-            )
-        if client is not None:
-            try:
-                await client.disconnect()
-            except Exception:
-                _LOGGER.debug("Could not disconnect discarded client (best-effort)", exc_info=True)
-        await asyncio.sleep(1.0)  # let BlueZ/HA scanner re-advertise before retry
+        finally:
+            if client is not None:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    _LOGGER.debug("Could not disconnect discarded client (best-effort)", exc_info=True)
+        await asyncio.sleep(1.0)  # allow the selected scanner to rediscover it
 
     async def _stop_current_controller(self) -> None:
         """Tear down the current controller (stop + disconnect) before replacement."""
@@ -223,12 +241,13 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         """Run one (re)connect cycle: connect once, validate, start, refresh.
 
         Opens exactly one BLE connection per attempt, validates the connected
-        client's GATT services before building a controller, clears the stack
-        cache and retries once on an empty/partial service set, tears down the
+        client's GATT services before building a controller, clears the selected
+        backend's cache and retries once on an empty/partial service set or a
+        notification-subscription timeout, tears down the
         previous controller before replacement, and calls start() exactly once
         on the freshly built controller. A client that is connected but never
         adopted (because start() failed or the cycle was cancelled) is released
-        so no BlueZ connection slot is leaked.
+        so no Bluetooth connection slot is leaked.
         """
         await self._stop_current_controller()
         for attempt in (1, 2):
@@ -258,7 +277,19 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
                     desk_config=desk_config,
                 ).create_controller(client, fallback_unit=self._fallback_unit)
                 controller.on(DeskEventType.HEIGHT, self._async_height_notify_callback)
-                await controller.start()  # EXACTLY ONCE, on the fresh controller
+                try:
+                    await controller.start()  # once per fresh controller
+                except TimeoutError:
+                    if attempt == 2:
+                        raise
+                    _LOGGER.warning(
+                        "Desk notification startup timed out; clearing its service "
+                        "cache before one reconnect attempt",
+                        exc_info=True,
+                    )
+                    await self._clear_cache_and_discard(client)
+                    await self._stop_controller(controller)
+                    continue
                 if self._intentional_disconnect:
                     raise RuntimeError("Desk coordinator is disconnecting")
                 self._desk = controller

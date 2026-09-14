@@ -99,7 +99,15 @@ New entries start with no fallback. Changing this option does not change the
 keypad's units or move the desk.
 
 
-<!-- CONTRIBUTING -->
+### Bluetooth Startup Recovery
+
+If notification subscription times out, the integration attempts to clear the
+desk's service cache through the selected Bluetooth backend before disconnecting
+and retrying once. This allows ESPHome proxies to clear their own cached GATT
+services; a local BlueZ cache clear alone cannot do that. A second subscription
+timeout is reported to Home Assistant. Cancellation and unload do not trigger
+another connection attempt.
+
 ### Stop Movement
 
 The `uplift_desk.stop` action stops one configured desk and cancels its pending
@@ -118,6 +126,7 @@ Stop packet was sent and does not queue a delayed Stop for a later reconnect.
 An explicit preset request made after Stop can still move the desk. Keep the
 physical keypad available; Bluetooth Stop is not an emergency-stop circuit.
 
+<!-- CONTRIBUTING -->
 ## Contributing
 
 Contributions are what make the open source community such an amazing place to be learn, inspire, and create. Any contributions you make are **greatly appreciated**.
