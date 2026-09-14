@@ -182,6 +182,35 @@ async def test_failed_stop_write_does_not_retry_or_reconnect(
     assert fake_ble.establish.call_count == attempts
 
 
+async def test_waiting_stop_does_not_transfer_to_a_replacement_connection(
+    fake_ble, loaded_desk
+):
+    """A Stop waiting behind a write belongs only to its original BLE session."""
+    entry, first = loaded_desk
+    coordinator = entry.runtime_data
+    second = fake_ble.client_with_services(build_service_collection(CONFIG))
+    fake_ble.queue_client(second)
+    await coordinator._motion_write_lock.acquire()
+    pending = asyncio.create_task(coordinator.async_stop_movement())
+    try:
+        await asyncio.sleep(0)
+        assert not pending.done()
+        first.simulate_disconnect()
+        await wait_until(
+            lambda: coordinator.is_connected
+            and coordinator._desk.client is second
+            and coordinator._reconnect_task is None
+        )
+        coordinator._motion_write_lock.release()
+        with pytest.raises(HomeAssistantError, match="no Stop packet"):
+            await pending
+        assert not any(packet[2] == 0x2B for _, packet, _ in second.writes)
+    finally:
+        if coordinator._motion_write_lock.locked():
+            coordinator._motion_write_lock.release()
+        await asyncio.gather(pending, return_exceptions=True)
+
+
 async def test_a_later_explicit_preset_keeps_the_stock_wake_sequence(loaded_desk):
     entry, client = loaded_desk
     await entry.runtime_data.async_stop_movement()

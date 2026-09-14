@@ -496,14 +496,20 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
     async def async_stop_movement(self) -> None:
         """Cancel pending recalls and send Stop only on the existing connection."""
         self._motion_generation += 1
+        controller = self._desk if self.is_connected else None
         async with self._motion_write_lock:
-            if self._intentional_disconnect or not self.is_connected:
+            if (
+                self._intentional_disconnect
+                or controller is None
+                or controller is not self._desk
+                or not self.is_connected
+            ):
                 raise HomeAssistantError(
-                    "Desk is not connected; pending presets were cancelled, "
+                    "Desk connection changed or is unavailable; pending presets were cancelled, "
                     "but no Stop packet was sent. Use the desk keypad."
                 )
             try:
-                await self._async_command_only(self._desk, "stop_movement")
+                await self._async_command_only(controller, "stop_movement")
             except (BleakError, TimeoutError) as err:
                 raise HomeAssistantError(
                     "Could not send Stop to the desk. Use the desk keypad."
