@@ -77,7 +77,7 @@ class DeskHeightSetpointNumber(
         self._attr_native_min_value, self._attr_native_max_value = self._effective_limits()
         self.async_write_ha_state()
 
-    def _effective_limits(self) -> tuple[float, float]:
+    def _effective_limits(self) -> tuple[int, int]:
         """Resolve the effective min/max (mm) from the desk's reported limits.
 
         A reported limit wins over the fallback default; partial knowledge
