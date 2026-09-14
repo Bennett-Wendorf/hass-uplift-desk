@@ -17,6 +17,7 @@ from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import (CONF_ADDRESS, Platform)
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
+from homeassistant.helpers import config_validation as cv
 
 from .coordinator import (
     UpliftDeskBluetoothCoordinator,
@@ -24,6 +25,7 @@ from .coordinator import (
 )
 
 _PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.BUTTON]
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 _LOGGER = logging.getLogger(__name__)
 

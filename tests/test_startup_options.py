@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from homeassistant.config_entries import ConfigEntryState
+from homeassistant.config_entries import ConfigEntryDisabler, ConfigEntryState
 from homeassistant.const import CONF_ADDRESS
 from homeassistant.data_entry_flow import FlowResultType
 
@@ -97,6 +97,32 @@ async def test_options_reload_to_notification_only_and_preserve_selection(hass, 
         assert result["data_schema"]({})[CONF_QUERY_ON_CONNECT] is False
         await clients[-1].simulate_notification(make_height_packet(300))
         await wait_until(lambda: entry.runtime_data.height_mm == 762.0)
+    finally:
+        await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_paused_existing_entry_can_disable_queries_before_activation(hass, fake_ble):
+    """Stage the option through HA while paused, then enable with no queries."""
+    entry = make_entry(hass, options={CONF_FALLBACK_UNIT: "centimeters"})
+    await hass.config_entries.async_set_disabled_by(entry.entry_id, ConfigEntryDisabler.USER)
+    client = fake_ble.valid_client()
+    fake_ble.queue_client(client)
+    try:
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            user_input={CONF_FALLBACK_UNIT: "centimeters", CONF_QUERY_ON_CONNECT: False},
+        )
+        await hass.async_block_till_done()
+        assert entry.disabled_by is ConfigEntryDisabler.USER
+        assert fake_ble.establish.call_count == 0
+        assert entry.options[CONF_QUERY_ON_CONNECT] is False
+
+        assert await hass.config_entries.async_set_disabled_by(entry.entry_id, None)
+        await hass.async_block_till_done()
+        assert entry.state is ConfigEntryState.LOADED
+        assert len(client.start_notify_calls) == 1
+        assert client.writes == []
     finally:
         await hass.config_entries.async_unload(entry.entry_id)
 
