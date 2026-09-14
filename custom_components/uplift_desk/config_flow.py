@@ -18,6 +18,7 @@ from .const import (
     DOMAIN,
     BLEAK_TIMEOUT_SECONDS,
     CONF_FALLBACK_UNIT,
+    CONF_QUERY_ON_CONNECT,
     FALLBACK_UNIT_NONE,
 )
 from uplift_ble.desk_enums import DeskUnit
@@ -68,8 +69,10 @@ def _validate_mac_address(value: str) -> str:
 
     raise vol.Invalid(f"invalid mac address: {value}")
 
-def _fallback_unit_schema(default: str = FALLBACK_UNIT_NONE) -> vol.Schema:
-    """Build the fallback height unit selector schema."""
+def _desk_options_schema(
+    default: str = FALLBACK_UNIT_NONE, query_on_connect: bool = True
+) -> vol.Schema:
+    """Build the height interpretation and connection options."""
     return vol.Schema(
         {
             vol.Required(
@@ -86,6 +89,7 @@ def _fallback_unit_schema(default: str = FALLBACK_UNIT_NONE) -> vol.Schema:
                     translation_key="fallback_unit",
                 )
             ),
+            vol.Required(CONF_QUERY_ON_CONNECT, default=query_on_connect): bool,
         }
     )
 
@@ -149,7 +153,10 @@ class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
             return self.async_create_entry(
                 title=title,
                 data={"address": discovery_info.address, "name": discovery_info.name},
-                options={CONF_FALLBACK_UNIT: user_input[CONF_FALLBACK_UNIT]},
+                options={
+                    CONF_FALLBACK_UNIT: user_input[CONF_FALLBACK_UNIT],
+                    CONF_QUERY_ON_CONNECT: user_input.get(CONF_QUERY_ON_CONNECT, True),
+                },
             )
 
         self._set_confirm_only()
@@ -157,7 +164,7 @@ class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
         self.context["title_placeholders"] = placeholders
         return self.async_show_form(
             step_id="bluetooth_confirm",
-            data_schema=_fallback_unit_schema(),
+            data_schema=_desk_options_schema(),
             description_placeholders=placeholders,
         )
 
@@ -380,7 +387,10 @@ class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
             return self.async_create_entry(
                 title=name,
                 data={"address": address, "name": name},
-                options={CONF_FALLBACK_UNIT: user_input[CONF_FALLBACK_UNIT]},
+                options={
+                    CONF_FALLBACK_UNIT: user_input[CONF_FALLBACK_UNIT],
+                    CONF_QUERY_ON_CONNECT: user_input.get(CONF_QUERY_ON_CONNECT, True),
+                },
             )
 
         # This is a confirmation-only step - suppress the back button
@@ -389,13 +399,13 @@ class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
         self.context["title_placeholders"] = placeholders
         return self.async_show_form(
             step_id="user_confirm",
-            data_schema=_fallback_unit_schema(),
+            data_schema=_desk_options_schema(),
             description_placeholders=placeholders,
         )
 
 
 class UpliftDeskOptionsFlow(OptionsFlow):
-    """Configure height interpretation when the desk does not report units."""
+    """Configure height interpretation and connection queries."""
 
     def __init__(self, config_entry: ConfigEntry) -> None:
         """Retain the entry for Home Assistant versions without config_entry."""
@@ -404,16 +414,25 @@ class UpliftDeskOptionsFlow(OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Show and save the fallback height unit."""
+        """Show and save the desk options."""
         if user_input is not None:
-            return self.async_create_entry(
-                title="", data={**self._config_entry.options, **user_input}
-            )
+            options = {**self._config_entry.options, **user_input}
+            if (
+                CONF_QUERY_ON_CONNECT not in self._config_entry.options
+                and options.get(CONF_QUERY_ON_CONNECT) is True
+            ):
+                # An absent option already means True. Opening and saving an
+                # unchanged older entry should not cause a Bluetooth reload.
+                options.pop(CONF_QUERY_ON_CONNECT)
+            return self.async_create_entry(title="", data=options)
         return self.async_show_form(
             step_id="init",
-            data_schema=_fallback_unit_schema(
+            data_schema=_desk_options_schema(
                 default=self._config_entry.options.get(
                     CONF_FALLBACK_UNIT, FALLBACK_UNIT_NONE
-                )
+                ),
+                query_on_connect=self._config_entry.options.get(
+                    CONF_QUERY_ON_CONNECT, True
+                ),
             ),
         )

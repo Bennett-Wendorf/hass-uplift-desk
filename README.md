@@ -101,6 +101,12 @@ keypad's units or move the desk.
 
 ### Bluetooth Startup Recovery
 
+The **Query units and limits on connect** option is enabled by default. Turn it
+off for desks that do not support those queries. With it disabled, startup and
+reconnection only subscribe to notifications; height stays unknown until the
+desk reports it. Select a fallback height unit if the desk does not report its
+units. Explicit preset and Stop actions remain available.
+
 If notification subscription times out, the integration attempts to clear the
 desk's service cache through the selected Bluetooth backend before disconnecting
 and retrying once. This allows ESPHome proxies to clear their own cached GATT

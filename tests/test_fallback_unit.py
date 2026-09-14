@@ -12,7 +12,9 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from uplift_ble.desk_enums import DeskUnit
 
 from custom_components.uplift_desk import async_migrate_entry
-from custom_components.uplift_desk.const import CONF_FALLBACK_UNIT, FALLBACK_UNIT_NONE
+from custom_components.uplift_desk.const import (
+    CONF_FALLBACK_UNIT, CONF_QUERY_ON_CONNECT, FALLBACK_UNIT_NONE,
+)
 from custom_components.uplift_desk.coordinator import UpliftDeskBluetoothCoordinator
 from custom_components.uplift_desk.sensor import DeskHeightSensor
 
@@ -76,7 +78,9 @@ async def test_options_manager_saves_and_reloads(hass, fake_ble, selection):
     with patch.object(hass.config_entries, "async_reload", AsyncMock(return_value=True)) as reload:
         result = await hass.config_entries.options.async_init(entry.entry_id)
         assert result["type"] is FlowResultType.FORM
-        assert result["data_schema"]({}) == {CONF_FALLBACK_UNIT: initial}
+        assert result["data_schema"]({}) == {
+            CONF_FALLBACK_UNIT: initial, CONF_QUERY_ON_CONNECT: True,
+        }
         with pytest.raises(vol.Invalid):
             result["data_schema"]({CONF_FALLBACK_UNIT: "meters"})
         result = await hass.config_entries.options.async_configure(
@@ -205,7 +209,9 @@ async def test_setup_flow_captures_fallback_unit(hass, fake_ble, monkeypatch, se
         )
         assert result["step_id"] == "user_confirm"
         # The confirm step now offers the fallback unit, defaulting to none.
-        assert result["data_schema"]({}) == {CONF_FALLBACK_UNIT: FALLBACK_UNIT_NONE}
+        assert result["data_schema"]({}) == {
+            CONF_FALLBACK_UNIT: FALLBACK_UNIT_NONE, CONF_QUERY_ON_CONNECT: True,
+        }
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"], user_input={CONF_FALLBACK_UNIT: selection}
         )
@@ -213,7 +219,9 @@ async def test_setup_flow_captures_fallback_unit(hass, fake_ble, monkeypatch, se
     assert result["type"] is FlowResultType.CREATE_ENTRY
     entry = result["result"]
     assert (entry.version, entry.minor_version) == (1, 2)
-    assert entry.options == {CONF_FALLBACK_UNIT: selection}
+    assert entry.options == {CONF_FALLBACK_UNIT: selection, CONF_QUERY_ON_CONNECT: True}
     # The options flow now defaults to the value captured during setup.
     result = await hass.config_entries.options.async_init(entry.entry_id)
-    assert result["data_schema"]({}) == {CONF_FALLBACK_UNIT: selection}
+    assert result["data_schema"]({}) == {
+        CONF_FALLBACK_UNIT: selection, CONF_QUERY_ON_CONNECT: True,
+    }

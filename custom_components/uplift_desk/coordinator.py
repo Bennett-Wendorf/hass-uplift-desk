@@ -25,7 +25,7 @@ from uplift_ble.desk_enums import (
 from uplift_ble.models import DiscoveredDesk as ValidatedDesk
 
 from .models import DiscoveredDesk
-from .const import CONF_FALLBACK_UNIT, FALLBACK_UNIT_NONE
+from .const import CONF_FALLBACK_UNIT, CONF_QUERY_ON_CONNECT, FALLBACK_UNIT_NONE
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
@@ -77,6 +77,7 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         self._fallback_unit = _parse_fallback_unit(
             config_entry.options.get(CONF_FALLBACK_UNIT)
         )
+        self._query_on_connect = config_entry.options.get(CONF_QUERY_ON_CONNECT, True)
         self._desk_variant: DeskVariant | None = None
         self.height_mm: float | None = None
         self.keypad_display_units = None
@@ -438,7 +439,8 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         return await self._read_desk_height(controller)
 
     async def _read_desk_height(self, controller: DeskController):
-        await controller.request_height_limits()
+        if self._query_on_connect:
+            await controller.request_height_limits()
         self.height_mm = controller.height_mm
         return self.height_mm
 
@@ -447,7 +449,8 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         return await self._read_desk_units(controller)
 
     async def _read_desk_units(self, controller: DeskController):
-        await controller.request_units()
+        if self._query_on_connect:
+            await controller.request_units()
         retrieved_unit = controller.unit
         if retrieved_unit is None:
             retrieved_unit = self._fallback_unit
