@@ -71,8 +71,9 @@ The integration currently provides 5 entities:
 4. A disabled-by-default button to move supported desks to configured preset 3.
 5. A disabled-by-default button to move supported desks to configured preset 4.
 
-Preset 3 and 4 buttons are currently limited to the verified `0x00FF` and
-`0xFE60` desk profiles.
+Preset 3 and 4 buttons are currently limited to the verified `0x00FF`,
+`0xFE60`, and `0xFF00` connected GATT profiles. Some V3 adapters advertise
+`0x00FF` during discovery but expose `0xFF00` after connecting.
 
 
 <!-- Getting Started -->
@@ -97,6 +98,39 @@ the desk keypad displays inches, change the fallback option after upgrading.
 New entries start with no fallback. Changing this option does not change the
 keypad's units or move the desk.
 
+
+### Bluetooth Startup Recovery
+
+The **Query units and limits on connect** option is enabled by default. Turn it
+off for desks that do not support those queries. With it disabled, startup and
+reconnection only subscribe to notifications; height stays unknown until the
+desk reports it. Select a fallback height unit if the desk does not report its
+units. Explicit preset and Stop actions remain available.
+
+If notification subscription times out, the integration attempts to clear the
+desk's service cache through the selected Bluetooth backend before disconnecting
+and retrying once. This allows ESPHome proxies to clear their own cached GATT
+services; a local BlueZ cache clear alone cannot do that. A second subscription
+timeout is reported to Home Assistant. Cancellation and unload do not trigger
+another connection attempt.
+
+### Stop Movement
+
+The `uplift_desk.stop` action stops one configured desk and cancels its pending
+preset recalls. Select the desk using `config_entry_id`; no extra entity or
+height reading is required.
+
+```yaml
+action: uplift_desk.stop
+data:
+  config_entry_id: YOUR_DESK_CONFIG_ENTRY_ID
+```
+
+Stop uses the existing Bluetooth connection and skips wake packets and
+notification waits. If the desk is disconnected, the action reports that no
+Stop packet was sent and does not queue a delayed Stop for a later reconnect.
+An explicit preset request made after Stop can still move the desk. Keep the
+physical keypad available; Bluetooth Stop is not an emergency-stop circuit.
 
 <!-- CONTRIBUTING -->
 ## Contributing

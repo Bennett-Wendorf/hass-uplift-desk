@@ -1,0 +1,14 @@
+stop:
+  name: Stop
+  description: >-
+    Cancel pending preset requests and stop movement over the desk's active
+    Bluetooth connection. If disconnected, no delayed reconnect is attempted;
+    use the physical keypad. This is not an emergency-stop system.
+  fields:
+    config_entry_id:
+      name: Desk
+      description: The configured Uplift Desk to stop.
+      required: true
+      selector:
+        config_entry:
+          integration: uplift_desk

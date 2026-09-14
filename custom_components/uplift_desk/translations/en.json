@@ -4,10 +4,12 @@
             "bluetooth_confirm": {
                 "description": "Add the discovered desk `{name}`?",
                 "data": {
-                    "fallback_unit": "Fallback height unit"
+                    "fallback_unit": "Fallback height unit",
+                    "query_on_connect": "Query units and limits on connect"
                 },
                 "data_description": {
-                    "fallback_unit": "Used only when the desk does not report its units. Match the desk's keypad setting. Choose no fallback to leave height unknown until units are reported. This does not change the keypad's units."
+                    "fallback_unit": "Used only when the desk does not report its units. Match the desk's keypad setting. Choose no fallback to leave height unknown until units are reported. This does not change the keypad's units.",
+                    "query_on_connect": "Turn off if your desk does not support these queries. Height will update from desk notifications. Select a fallback height unit if the desk does not report its units."
                 }
             },
             "user": {
@@ -29,10 +31,12 @@
                 "title": "Confirm Desk Details",
                 "description": "Please confirm the details for your desk:\n\n**Name:** `{name}`\n**Address:** `{address}`",
                 "data": {
-                    "fallback_unit": "Fallback height unit"
+                    "fallback_unit": "Fallback height unit",
+                    "query_on_connect": "Query units and limits on connect"
                 },
                 "data_description": {
-                    "fallback_unit": "Used only when the desk does not report its units. Match the desk's keypad setting. Choose no fallback to leave height unknown until units are reported. This does not change the keypad's units."
+                    "fallback_unit": "Used only when the desk does not report its units. Match the desk's keypad setting. Choose no fallback to leave height unknown until units are reported. This does not change the keypad's units.",
+                    "query_on_connect": "Turn off if your desk does not support these queries. Height will update from desk notifications. Select a fallback height unit if the desk does not report its units."
                 }
             }
         },
@@ -61,10 +65,12 @@
             "init": {
                 "title": "Desk options",
                 "data": {
-                    "fallback_unit": "Fallback height unit"
+                    "fallback_unit": "Fallback height unit",
+                    "query_on_connect": "Query units and limits on connect"
                 },
                 "data_description": {
-                    "fallback_unit": "Used only when the desk does not report its units. Match the desk's keypad setting. Choose no fallback to leave height unknown until units are reported. This does not change the keypad's units."
+                    "fallback_unit": "Used only when the desk does not report its units. Match the desk's keypad setting. Choose no fallback to leave height unknown until units are reported. This does not change the keypad's units.",
+                    "query_on_connect": "Turn off if your desk does not support these queries. Height will update from desk notifications. Select a fallback height unit if the desk does not report its units."
                 }
             }
         }

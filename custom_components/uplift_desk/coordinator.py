@@ -8,6 +8,7 @@ import logging
 from homeassistant.components.bluetooth import async_ble_device_from_address
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from bleak import BleakError
@@ -16,7 +17,7 @@ from bleak_retry_connector import BleakClientWithServiceCache, establish_connect
 from bleak_retry_connector.bluez import clear_cache
 
 from uplift_ble.desk_configs import DESK_CONFIGS_BY_SERVICE, DeskConfig, DeskVariant
-from uplift_ble.desk_controller import DeskController
+from uplift_ble.desk_controller import DeskController, command_writer
 from uplift_ble.desk_enums import (
     DeskEventType,
     DeskUnit,
@@ -24,13 +25,15 @@ from uplift_ble.desk_enums import (
 from uplift_ble.models import DiscoveredDesk as ValidatedDesk
 
 from .models import DiscoveredDesk
-from .const import CONF_FALLBACK_UNIT, FALLBACK_UNIT_NONE
+from .const import CONF_FALLBACK_UNIT, CONF_QUERY_ON_CONNECT, FALLBACK_UNIT_NONE
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
 _EXTENDED_PRESET_VARIANTS = {
     DeskVariant.JIECANG_0x00FF,
     DeskVariant.JIECANG_0xFE60,
+    # Some V3 adapters advertise 0x00FF but expose 0xFF00 after connecting.
+    DeskVariant.JIECANG_0xFF00,
 }
 
 
@@ -69,9 +72,12 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         self._desk_ble_device = desk_ble_device
         self._desk = None
         self._desk_lock = asyncio.Lock()
+        self._motion_write_lock = asyncio.Lock()
+        self._motion_generation = 0
         self._fallback_unit = _parse_fallback_unit(
             config_entry.options.get(CONF_FALLBACK_UNIT)
         )
+        self._query_on_connect = config_entry.options.get(CONF_QUERY_ON_CONNECT, True)
         self._desk_variant: DeskVariant | None = None
         self.height_mm: float | None = None
         self.keypad_display_units = None
@@ -155,26 +161,44 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         return None
 
     async def _clear_cache_and_discard(self, client) -> None:
-        """Best-effort: clear the stack service cache and discard the client."""
+        """Clear the selected backend's cache before discarding its client."""
+        cleared = False
         try:
-            cleared = await clear_cache(self.desk_address)
+            clear_client_cache = getattr(client, "clear_cache", None)
+            if callable(clear_client_cache):
+                try:
+                    # ESPHome clears its on-device cache through this API and
+                    # requires the BLE connection to still be active.
+                    cleared = await clear_client_cache()
+                except Exception:
+                    _LOGGER.debug(
+                        "Could not clear the client's service cache for %s",
+                        self.desk_address,
+                        exc_info=True,
+                    )
+            if not cleared:
+                try:
+                    # Retain recovery for local BlueZ clients without the
+                    # backend extension. This does not address ESP32 caches.
+                    cleared = await clear_cache(self.desk_address)
+                except Exception:
+                    _LOGGER.debug(
+                        "Could not clear BlueZ cache for %s (best-effort)",
+                        self.desk_address,
+                        exc_info=True,
+                    )
             _LOGGER.warning(
-                "Cleared bleak_retry_connector service cache for %s (cleared=%s)",
+                "Service cache clear for %s (cleared=%s)",
                 self.desk_address,
                 cleared,
             )
-        except Exception:
-            _LOGGER.debug(
-                "Could not clear service cache for %s (best-effort)",
-                self.desk_address,
-                exc_info=True,
-            )
-        if client is not None:
-            try:
-                await client.disconnect()
-            except Exception:
-                _LOGGER.debug("Could not disconnect discarded client (best-effort)", exc_info=True)
-        await asyncio.sleep(1.0)  # let BlueZ/HA scanner re-advertise before retry
+        finally:
+            if client is not None:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    _LOGGER.debug("Could not disconnect discarded client (best-effort)", exc_info=True)
+        await asyncio.sleep(1.0)  # allow the selected scanner to rediscover it
 
     async def _stop_current_controller(self) -> None:
         """Tear down the current controller (stop + disconnect) before replacement."""
@@ -218,12 +242,13 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         """Run one (re)connect cycle: connect once, validate, start, refresh.
 
         Opens exactly one BLE connection per attempt, validates the connected
-        client's GATT services before building a controller, clears the stack
-        cache and retries once on an empty/partial service set, tears down the
+        client's GATT services before building a controller, clears the selected
+        backend's cache and retries once on an empty/partial service set or a
+        notification-subscription timeout, tears down the
         previous controller before replacement, and calls start() exactly once
         on the freshly built controller. A client that is connected but never
         adopted (because start() failed or the cycle was cancelled) is released
-        so no BlueZ connection slot is leaked.
+        so no Bluetooth connection slot is leaked.
         """
         await self._stop_current_controller()
         for attempt in (1, 2):
@@ -253,7 +278,19 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
                     desk_config=desk_config,
                 ).create_controller(client, fallback_unit=self._fallback_unit)
                 controller.on(DeskEventType.HEIGHT, self._async_height_notify_callback)
-                await controller.start()  # EXACTLY ONCE, on the fresh controller
+                try:
+                    await controller.start()  # once per fresh controller
+                except TimeoutError:
+                    if attempt == 2:
+                        raise
+                    _LOGGER.warning(
+                        "Desk notification startup timed out; clearing its service "
+                        "cache before one reconnect attempt",
+                        exc_info=True,
+                    )
+                    await self._clear_cache_and_discard(client)
+                    await self._stop_controller(controller)
+                    continue
                 if self._intentional_disconnect:
                     raise RuntimeError("Desk coordinator is disconnecting")
                 self._desk = controller
@@ -384,6 +421,7 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
     async def async_disconnect(self) -> None:
         """Tear down cleanly on unload: cancel reconnects, stop, disconnect, drop the controller."""
         self._intentional_disconnect = True
+        self._motion_generation += 1
         reconnect_task = self._reconnect_task
         self._reconnect_task = None
         try:
@@ -401,7 +439,8 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         return await self._read_desk_height(controller)
 
     async def _read_desk_height(self, controller: DeskController):
-        await controller.request_height_limits()
+        if self._query_on_connect:
+            await controller.request_height_limits()
         self.height_mm = controller.height_mm
         return self.height_mm
 
@@ -410,7 +449,8 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         return await self._read_desk_units(controller)
 
     async def _read_desk_units(self, controller: DeskController):
-        await controller.request_units()
+        if self._query_on_connect:
+            await controller.request_units()
         retrieved_unit = controller.unit
         if retrieved_unit is None:
             retrieved_unit = self._fallback_unit
@@ -422,16 +462,61 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         return self.keypad_display_units
 
     async def async_preset_1(self):
-        await (await self._get_or_establish_controller()).move_to_height_preset_1()
+        await self._async_recall_preset(1)
 
     async def async_preset_2(self):
-        await (await self._get_or_establish_controller()).move_to_height_preset_2()
+        await self._async_recall_preset(2)
 
     async def async_preset_3(self):
-        await (await self._get_or_establish_controller()).move_to_height_preset_3()
+        await self._async_recall_preset(3)
 
     async def async_preset_4(self):
-        await (await self._get_or_establish_controller()).move_to_height_preset_4()
+        await self._async_recall_preset(4)
+
+    async def _async_recall_preset(self, slot: int) -> None:
+        """Discard a pending recall if Stop or unload supersedes it."""
+        generation = self._motion_generation
+        controller = await self._get_or_establish_controller()
+        # Preserve 0.7.0's wake sequence outside the final-write lock, so a
+        # slow wake or reconnect cannot hold Stop behind a later motion write.
+        if controller.requires_wake:
+            for _ in range(3):
+                if generation != self._motion_generation or self._intentional_disconnect:
+                    return
+                await controller.wake()
+                await asyncio.sleep(0.1)
+        async with self._motion_write_lock:
+            if generation != self._motion_generation or self._intentional_disconnect:
+                return
+            await self._async_command_only(controller, f"move_to_height_preset_{slot}")
+
+    @staticmethod
+    async def _async_command_only(controller: DeskController, name: str) -> None:
+        """Keep the library's packet definition while omitting wake and waits."""
+        definition = getattr(DeskController, name).__wrapped__
+        await command_writer(skip_wake=True)(definition)(controller)
+
+    async def async_stop_movement(self) -> None:
+        """Cancel pending recalls and send Stop only on the existing connection."""
+        self._motion_generation += 1
+        controller = self._desk if self.is_connected else None
+        async with self._motion_write_lock:
+            if (
+                self._intentional_disconnect
+                or controller is None
+                or controller is not self._desk
+                or not self.is_connected
+            ):
+                raise HomeAssistantError(
+                    "Desk connection changed or is unavailable; pending presets were cancelled, "
+                    "but no Stop packet was sent. Use the desk keypad."
+                )
+            try:
+                await self._async_command_only(controller, "stop_movement")
+            except (BleakError, TimeoutError) as err:
+                raise HomeAssistantError(
+                    "Could not send Stop to the desk. Use the desk keypad."
+                ) from err
 
     async def async_wake(self):
         await (await self._get_or_establish_controller()).wake()
