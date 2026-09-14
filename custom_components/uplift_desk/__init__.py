@@ -22,7 +22,7 @@ from .coordinator import (
     Uplift_Desk_DeskConfigEntry,
 )
 
-_PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.BUTTON]
+_PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.BUTTON, Platform.NUMBER]
 
 _LOGGER = logging.getLogger(__name__)
 

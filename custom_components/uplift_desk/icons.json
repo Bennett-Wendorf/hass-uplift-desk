@@ -18,6 +18,11 @@
             "desk_preset_4":{
                 "default": "mdi:numeric-4-box-outline"
             }
+        },
+        "number":{
+            "desk_height_setpoint":{
+                "default": "mdi:arrow-up-down"
+            }
         }
     }
 }
