@@ -39,7 +39,13 @@ async def async_setup_entry(
 class DeskHeightSetpointNumber(
     CoordinatorEntity[UpliftDeskBluetoothCoordinator], 
     NumberEntity):
-    """Representation of a desk height setpoint number."""
+    """Representation of a desk height setpoint number.
+
+    Shows the commanded *target* height (the setpoint tracked by the
+    coordinator): unknown when the desk is at rest or no move is in
+    progress, and the commanded height while the desk is moving toward it.
+    The desk's live position is reported by the separate Height sensor.
+    """
 
     _attr_should_poll = False
 
@@ -58,7 +64,8 @@ class DeskHeightSetpointNumber(
         )
         self._attr_unique_id = f"{coordinator.desk_address}_{self.entity_description.key}"
         self._attr_native_min_value, self._attr_native_max_value = self._effective_limits()
-        self._attr_native_value = coordinator.height_mm
+        # No setpoint is active at setup time: the entity starts unknown.
+        self._attr_native_value = None
 
     @property
     def device_info(self):
@@ -73,7 +80,7 @@ class DeskHeightSetpointNumber(
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
-        self._attr_native_value = self.coordinator.height_mm
+        self._attr_native_value = self.coordinator.height_setpoint_mm
         self._attr_native_min_value, self._attr_native_max_value = self._effective_limits()
         self.async_write_ha_state()
 
