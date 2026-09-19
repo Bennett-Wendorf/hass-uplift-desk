@@ -4,10 +4,18 @@ If you are upgrading the Uplift Desk integration, here is what improves for
 you. No configuration changes are required — existing setups keep working as
 they are.
 
+- **Height Setpoint is now a true target display.** The **Height Setpoint**
+  number shows the height you commanded while the desk is moving toward it,
+  and returns to *unknown* when the desk arrives, the move is interrupted
+  (keypad or preset), or the desk disconnects. Previously it mirrored the
+  desk's live height, so the target you typed was immediately replaced by the
+  moving desk's position. The **Height** sensor remains the live position.
+
 - **Height Setpoint: move the desk to any height.** A new **Height Setpoint**
   number entity lets you command the desk to move to any height you type in —
-  not just the four presets. The entity shows the desk's current height, and
-  its allowed range follows the desk's configured height limits.
+  not just the four presets. The entity shows the height you commanded while
+  the desk moves toward it, and its allowed range follows the desk's
+  configured height limits.
 
 - **Automatic reconnection.** The desk now reconnects by itself after a
   Bluetooth (BLE) drop. Previously, once the link fell the desk stayed "dead
