@@ -358,6 +358,10 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
                 "Cleared height setpoint for desk %s on unexpected disconnect",
                 self.desk_info,
             )
+            # The cached position is invalid once the link is gone: the first
+            # height notification after a (re)connect must not reconcile the
+            # setpoint against a stale pre-disconnect height.
+            self.height_mm = None
             # With self._desk now None, push unavailability to the entities.
             self.async_update_listeners()
             self._start_reconnect_loop()
@@ -435,6 +439,8 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
             "Cleared height setpoint for desk %s on disconnect",
             self.desk_info,
         )
+        # The cached position is invalid once the link is gone.
+        self.height_mm = None
         reconnect_task = self._reconnect_task
         self._reconnect_task = None
         try:

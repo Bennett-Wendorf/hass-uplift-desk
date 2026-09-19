@@ -19,5 +19,8 @@ HEIGHT_SETPOINT_ARRIVAL_TOLERANCE_MM: float = 4.0
 # 1 mm is the smallest cm-mode quantum: a single-quantum backward blip is
 # indistinguishable from encoder noise, while a real manual interruption
 # produces multi-quantum movement (inch-mode quanta of 2.54 mm always exceed
-# this epsilon).
+# this epsilon). Note the mode asymmetry: in inch mode a single-quantum
+# (2.54 mm) backward blip exceeds this epsilon and IS treated as an
+# interruption; raise this value if field data shows inch-mode desks emit
+# single-quantum encoder blips.
 HEIGHT_SETPOINT_INTERRUPTION_EPSILON_MM: float = 1.0
