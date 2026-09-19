@@ -64,12 +64,13 @@ This integration relies on the uplift-ble Python package, which can be found on 
 
 > Normally, an advanced keypad with programmable buttons is required to use this integration (to set the presets the integration exposes). However, for users without an advanced keypad, the desk can still be programmed with preset values using the cli provided by the [uplift-ble](https://github.com/librick/uplift-ble) to set the preset values. 
 
-The integration currently provides 5 entities:
+The integration currently provides 6 entities:
 1. A sensor for the current height of the desk. This will update automatically as your desk is moving, though it is not instantaneous and should not be relied on for safety.
 2. A button to move the desk to its configured preset 1.
 3. A button to move the desk to its configured preset 2.
 4. A disabled-by-default button to move supported desks to configured preset 3.
 5. A disabled-by-default button to move supported desks to configured preset 4.
+6. A number to move the desk to a specific height (the Height Setpoint).
 
 Preset 3 and 4 buttons are currently limited to the verified `0x00FF` and
 `0xFE60` desk profiles.
