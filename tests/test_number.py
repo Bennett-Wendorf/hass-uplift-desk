@@ -4,7 +4,9 @@ Covers the entity's static properties (BOX mode, DISTANCE device class, mm
 native unit, 1 mm step, fallback 500-1300 bounds), the dynamic min/max fed by
 the height-limit notifications (0x07 configuration, 0x21 max, 0x22 min), the
 set path (0x1B move command), the in-flight coalescing guard, the
-locked-desk guard, and the state mirroring the desk's current height.
+locked-desk guard, and the setpoint semantics: the entity shows the commanded
+target while the desk moves toward it and returns to unknown on arrival,
+interruption, or disconnect.
 
 State assertions (min/max/value/available) go through a full config-entry
 setup and ``hass.states``, because ``CoordinatorEntity`` only registers
@@ -135,7 +137,7 @@ def _number_entity_id(hass: HomeAssistant) -> str:
     """Resolve the height setpoint number's entity id via the entity registry."""
     registry = er.async_get(hass)
     entity_id = registry.async_get_entity_id(
-        DESK_DOMAIN, "number", f"{DESK_ADDRESS}_desk_height_setpoint"
+        "number", DESK_DOMAIN, f"{DESK_ADDRESS}_desk_height_setpoint"
     )
     assert entity_id is not None, "height setpoint number entity not in registry"
     return entity_id
@@ -168,8 +170,8 @@ async def test_number_entity_created_with_fallback_limits(
 
     state = hass.states.get(entity_id)
     assert state is not None
-    # No height notification has arrived yet: the value is unknown, but the
-    # entity is available (the desk is connected).
+    # No setpoint has been set: the value is unknown, but the entity is
+    # available (the desk is connected).
     assert state.state == STATE_UNKNOWN
     # Fallback limits: no limit notification has been pushed.
     assert state.attributes["min"] == DEFAULT_HEIGHT_LIMIT_MIN_MM
@@ -240,6 +242,8 @@ async def test_set_value_issues_move_command(fake_ble, coordinator):
     await number.async_set_native_value(800)
 
     assert coordinator._move_in_flight is False
+    # The successful set leaves the commanded target as the active setpoint.
+    assert coordinator.height_setpoint_mm == 800
 
     move_frame = make_command_packet(0x1B, (800).to_bytes(2, "big"))
     input_writes = [
@@ -269,6 +273,9 @@ async def test_second_set_while_in_flight_is_rejected(fake_ble, coordinator):
     assert len(client.writes) == writes_before
     # ...and the in-flight command still owns the flag.
     assert coordinator._move_in_flight is True
+    # No setpoint was ever set in this test (the rejection happens before any
+    # setpoint mutation).
+    assert coordinator.height_setpoint_mm is None
 
 
 async def test_locked_desk_rejects_move(fake_ble, coordinator):
@@ -290,6 +297,7 @@ async def test_locked_desk_rejects_move(fake_ble, coordinator):
     await coordinator.async_move_to_height(800)
     assert coordinator._move_in_flight is False
     assert _move_write_count() == 1
+    assert coordinator.height_setpoint_mm == 800
 
     # The desk now reports LOCKED (0x1F notification, byte 0x01).
     await client.simulate_notification(make_lock_packet(0x01))
@@ -306,25 +314,164 @@ async def test_locked_desk_rejects_move(fake_ble, coordinator):
     assert len(client.writes) == writes_before
     # ...and the flag is cleared again.
     assert coordinator._move_in_flight is False
+    # The rejected set did not wipe the earlier target: the setpoint is
+    # restored to its pre-call value.
+    assert coordinator.height_setpoint_mm == 800
 
 
-async def test_number_state_mirrors_current_height(
+async def test_set_value_shows_target_while_height_streams_in(
     hass, config_entry, fake_ble, monkeypatch
 ):
-    """A 0x01 height notification updates the number's state to the desk height."""
+    """The number keeps showing the target while height notifications stream in."""
     coordinator, client = await _setup_entry(hass, config_entry, fake_ble, monkeypatch)
     entity_id = _number_entity_id(hass)
 
-    # The desk reports its display unit (cm), then the current height (75.0 cm).
+    await hass.services.async_call(
+        "number", "set_value", {"entity_id": entity_id, "value": 800}, blocking=True
+    )
+    await wait_until(
+        lambda: (state := hass.states.get(entity_id)) is not None
+        and float(state.state) == 800.0
+    )
+
+    # The desk reports its display unit (cm), then streams the live height
+    # while it moves toward the target.
     await client.simulate_notification(make_units_packet(0x00))
     await client.simulate_notification(make_height_packet(750))
-
     await wait_until(lambda: coordinator.height_mm == 750.0)
-    assert coordinator.height_mm == 750.0
+    await client.simulate_notification(make_height_packet(760))
+    await wait_until(lambda: coordinator.height_mm == 760.0)
+    await client.simulate_notification(make_height_packet(770))
+    await wait_until(lambda: coordinator.height_mm == 770.0)
 
-    state = hass.states.get(entity_id)
-    assert state is not None
-    assert float(state.state) == 750.0
+    # The number still shows the commanded target, not the live height.
+    await wait_until(
+        lambda: (state := hass.states.get(entity_id)) is not None
+        and float(state.state) == 800.0
+    )
+    assert coordinator.height_setpoint_mm == 800
+    assert coordinator.height_mm == 770.0
+
+
+async def test_setpoint_clears_on_arrival(
+    hass, config_entry, fake_ble, monkeypatch
+):
+    """The number returns to unknown when the desk arrives within 4 mm of the target."""
+    coordinator, client = await _setup_entry(hass, config_entry, fake_ble, monkeypatch)
+    entity_id = _number_entity_id(hass)
+
+    await hass.services.async_call(
+        "number", "set_value", {"entity_id": entity_id, "value": 800}, blocking=True
+    )
+    await wait_until(
+        lambda: (state := hass.states.get(entity_id)) is not None
+        and float(state.state) == 800.0
+    )
+
+    await client.simulate_notification(make_units_packet(0x00))
+    await client.simulate_notification(make_height_packet(750))
+    await wait_until(lambda: coordinator.height_mm == 750.0)
+    assert float(hass.states.get(entity_id).state) == 800.0
+
+    await client.simulate_notification(make_height_packet(790))
+    await wait_until(lambda: coordinator.height_mm == 790.0)
+    assert float(hass.states.get(entity_id).state) == 800.0
+
+    # 798 mm is within the 4 mm arrival tolerance of the 800 mm target.
+    await client.simulate_notification(make_height_packet(798))
+    await wait_until(lambda: coordinator.height_mm == 798.0)
+    await wait_until(lambda: hass.states.get(entity_id).state == STATE_UNKNOWN)
+    assert coordinator.height_setpoint_mm is None
+
+
+async def test_setpoint_clears_on_interruption(
+    hass, config_entry, fake_ble, monkeypatch
+):
+    """The number returns to unknown when the desk moves away from the target."""
+    coordinator, client = await _setup_entry(hass, config_entry, fake_ble, monkeypatch)
+    entity_id = _number_entity_id(hass)
+
+    await hass.services.async_call(
+        "number", "set_value", {"entity_id": entity_id, "value": 800}, blocking=True
+    )
+    await wait_until(
+        lambda: (state := hass.states.get(entity_id)) is not None
+        and float(state.state) == 800.0
+    )
+
+    await client.simulate_notification(make_units_packet(0x00))
+    await client.simulate_notification(make_height_packet(750))
+    await wait_until(lambda: coordinator.height_mm == 750.0)
+    await client.simulate_notification(make_height_packet(760))
+    await wait_until(lambda: coordinator.height_mm == 760.0)
+    assert float(hass.states.get(entity_id).state) == 800.0
+
+    # A 5 mm move away from the target interrupts the move.
+    await client.simulate_notification(make_height_packet(755))
+    await wait_until(lambda: coordinator.height_mm == 755.0)
+    await wait_until(lambda: hass.states.get(entity_id).state == STATE_UNKNOWN)
+    assert coordinator.height_setpoint_mm is None
+
+
+async def test_setpoint_survives_single_mm_jitter(
+    hass, config_entry, fake_ble, monkeypatch
+):
+    """A single-quantum (1 mm) backward blip does not clear the setpoint."""
+    coordinator, client = await _setup_entry(hass, config_entry, fake_ble, monkeypatch)
+    entity_id = _number_entity_id(hass)
+
+    await hass.services.async_call(
+        "number", "set_value", {"entity_id": entity_id, "value": 800}, blocking=True
+    )
+    await wait_until(
+        lambda: (state := hass.states.get(entity_id)) is not None
+        and float(state.state) == 800.0
+    )
+
+    await client.simulate_notification(make_units_packet(0x00))
+    await client.simulate_notification(make_height_packet(750))
+    await wait_until(lambda: coordinator.height_mm == 750.0)
+    await client.simulate_notification(make_height_packet(760))
+    await wait_until(lambda: coordinator.height_mm == 760.0)
+
+    # 1 mm backward: indistinguishable from encoder jitter.
+    await client.simulate_notification(make_height_packet(759))
+    await wait_until(lambda: coordinator.height_mm == 759.0)
+
+    await wait_until(
+        lambda: (state := hass.states.get(entity_id)) is not None
+        and float(state.state) == 800.0
+    )
+    assert coordinator.height_setpoint_mm == 800
+
+
+async def test_setpoint_equal_to_current_height_clears_immediately(
+    hass, config_entry, fake_ble, monkeypatch
+):
+    """Setting the current height still sends the command but clears the setpoint at once."""
+    coordinator, client = await _setup_entry(hass, config_entry, fake_ble, monkeypatch)
+    entity_id = _number_entity_id(hass)
+
+    # The desk is already at 800 mm.
+    await client.simulate_notification(make_units_packet(0x00))
+    await client.simulate_notification(make_height_packet(800))
+    await wait_until(lambda: coordinator.height_mm == 800.0)
+
+    await hass.services.async_call(
+        "number", "set_value", {"entity_id": entity_id, "value": 800}, blocking=True
+    )
+    await wait_until(lambda: hass.states.get(entity_id).state == STATE_UNKNOWN)
+
+    # The command was still sent (the firmware accepts it harmlessly)...
+    move_frame = make_command_packet(0x1B, (800).to_bytes(2, "big"))
+    input_writes = [
+        data
+        for char_uuid, data, _ in client.writes
+        if char_uuid == DESK_CONFIG.input_char_uuid
+    ]
+    assert input_writes.count(move_frame) == 1
+    # ...but the setpoint is cleared immediately (treated as immediate arrival).
+    assert coordinator.height_setpoint_mm is None
 
 
 async def test_number_unavailable_when_disconnected(
@@ -334,7 +481,14 @@ async def test_number_unavailable_when_disconnected(
     coordinator, client = await _setup_entry(hass, config_entry, fake_ble, monkeypatch)
     entity_id = _number_entity_id(hass)
 
-    assert hass.states.get(entity_id).state != STATE_UNAVAILABLE
+    # An active setpoint is cleared by the disconnect.
+    await hass.services.async_call(
+        "number", "set_value", {"entity_id": entity_id, "value": 800}, blocking=True
+    )
+    await wait_until(
+        lambda: (state := hass.states.get(entity_id)) is not None
+        and float(state.state) == 800.0
+    )
 
     # Simulate an unexpected link drop; a fresh client is queued so the
     # proactive reconnect loop can restore the connection.
@@ -347,10 +501,13 @@ async def test_number_unavailable_when_disconnected(
     )
     assert coordinator.is_connected is False
     assert hass.states.get(entity_id).state == STATE_UNAVAILABLE
+    # The link is gone, so the commanded target is no longer being tracked.
+    assert coordinator.height_setpoint_mm is None
 
     await wait_until(
         lambda: coordinator.is_connected is True
-        and hass.states.get(entity_id).state != STATE_UNAVAILABLE
+        and hass.states.get(entity_id).state == STATE_UNKNOWN
     )
     assert coordinator.is_connected
-    assert hass.states.get(entity_id).state != STATE_UNAVAILABLE
+    # No stale setpoint survives the reconnect: the entity is unknown.
+    assert hass.states.get(entity_id).state == STATE_UNKNOWN
