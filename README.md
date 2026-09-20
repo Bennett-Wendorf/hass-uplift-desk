@@ -72,8 +72,9 @@ The integration currently provides 6 entities:
 5. A disabled-by-default button to move supported desks to configured preset 4.
 6. A number to move the desk to a specific height (the Height Setpoint).
 
-Preset 3 and 4 buttons are currently limited to the verified `0x00FF` and
-`0xFE60` desk profiles.
+Preset 3 and 4 buttons are currently limited to the verified `0x00FF`,
+`0xFE60`, and `0xFF00` connected GATT profiles. Some V3 adapters advertise
+`0x00FF` during discovery but expose `0xFF00` after connecting.
 
 
 <!-- Getting Started -->

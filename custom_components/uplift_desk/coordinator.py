@@ -38,6 +38,8 @@ _LOGGER: logging.Logger = logging.getLogger(__name__)
 _EXTENDED_PRESET_VARIANTS = {
     DeskVariant.JIECANG_0x00FF,
     DeskVariant.JIECANG_0xFE60,
+    # Some V3 adapters advertise 0x00FF but expose 0xFF00 after connecting.
+    DeskVariant.JIECANG_0xFF00,
 }
 
 
