@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 import logging
-import voluptuous as vol
 
 from .const import CONF_FALLBACK_UNIT, DOMAIN
 
@@ -13,10 +12,10 @@ from bleak import BleakError
 from homeassistant.components.bluetooth import (
     async_ble_device_from_address
 )
-from homeassistant.config_entries import ConfigEntry, ConfigEntryState
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (CONF_ADDRESS, Platform)
-from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
 
 from .coordinator import (
@@ -28,26 +27,6 @@ _PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.BUTTON, Platform.NUMBER]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 _LOGGER = logging.getLogger(__name__)
-
-
-async def async_setup(hass: HomeAssistant, config: dict) -> bool:
-    """Register Stop for one explicitly selected desk without adding an entity."""
-    async def stop(call: ServiceCall) -> None:
-        entry = hass.config_entries.async_get_entry(call.data["config_entry_id"])
-        if entry is None or entry.domain != DOMAIN or entry.state is not ConfigEntryState.LOADED:
-            raise HomeAssistantError("The selected Uplift Desk entry is not loaded")
-        coordinator = getattr(entry, "runtime_data", None)
-        if not isinstance(coordinator, UpliftDeskBluetoothCoordinator):
-            raise HomeAssistantError("The selected Uplift Desk controller is unavailable")
-        await coordinator.async_stop_movement()
-
-    hass.services.async_register(
-        DOMAIN,
-        "stop",
-        stop,
-        schema=vol.Schema({vol.Required("config_entry_id"): str}),
-    )
-    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: Uplift_Desk_DeskConfigEntry) -> bool:

@@ -5,16 +5,34 @@ from unittest.mock import AsyncMock
 
 import pytest
 from bleak import BleakError
+from homeassistant.const import CONF_ADDRESS, STATE_UNAVAILABLE
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 from uplift_ble.desk_configs import DESK_CONFIGS_BY_SERVICE
 
-from .conftest import build_service_collection, wait_until
+from .conftest import FakeBLEDevice, build_service_collection, wait_until
 from .test_preset_buttons import make_entry
 
 
 CONFIG = DESK_CONFIGS_BY_SERVICE["0000ff00-0000-1000-8000-00805f9b34fb"]
 STOP_PACKET = bytes((0xF1, 0xF1, 0x2B, 0, 0x2B, 0x7E))
+
+
+def stop_entity_id(hass, entry):
+    """Resolve the desk's Stop button through its stable registry identity."""
+    entity_id = er.async_get(hass).async_get_entity_id(
+        "button", "uplift_desk", f"{entry.data['address']}_desk_stop"
+    )
+    assert entity_id is not None
+    return entity_id
+
+
+async def press_stop(hass, entry):
+    """Use the same HA action as the UI, automations, and Companion."""
+    await hass.services.async_call(
+        "button", "press", {"entity_id": stop_entity_id(hass, entry)}, blocking=True
+    )
 
 
 @pytest.fixture
@@ -35,7 +53,7 @@ async def loaded_desk(hass, fake_ble, monkeypatch):
         await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_stop_service_sends_only_stop_without_height_or_new_entities(
+async def test_stop_button_sends_only_stop_without_height(
     hass, fake_ble, loaded_desk
 ):
     entry, client = loaded_desk
@@ -47,9 +65,16 @@ async def test_stop_service_sends_only_stop_without_height_or_new_entities(
     assert entry.runtime_data.height_mm is None
     attempts = fake_ble.establish.call_count
 
-    await hass.services.async_call(
-        "uplift_desk", "stop", {"config_entry_id": entry.entry_id}, blocking=True
-    )
+    stop = registry.async_get(stop_entity_id(hass, entry))
+    assert stop.disabled_by is None
+    assert stop.device_id == registry.async_get(
+        registry.async_get_entity_id(
+            "sensor", "uplift_desk", f"{entry.data['address']}_desk_height"
+        )
+    ).device_id
+    assert not hass.services.has_service("uplift_desk", "stop")
+
+    await press_stop(hass, entry)
 
     assert client.writes == [(CONFIG.input_char_uuid, STOP_PACKET, False)]
     assert fake_ble.establish.call_count == attempts
@@ -61,10 +86,9 @@ async def test_stop_service_sends_only_stop_without_height_or_new_entities(
 
 async def test_unknown_stop_target_does_not_broadcast(hass, loaded_desk):
     _, client = loaded_desk
-    with pytest.raises(HomeAssistantError, match="not loaded"):
-        await hass.services.async_call(
-            "uplift_desk", "stop", {"config_entry_id": "missing"}, blocking=True
-        )
+    await hass.services.async_call(
+        "button", "press", {"entity_id": "button.missing_stop"}, blocking=True
+    )
     assert client.writes == []
 
 
@@ -72,12 +96,135 @@ async def test_unloaded_stop_target_does_not_connect(hass, fake_ble, loaded_desk
     entry, client = loaded_desk
     assert await hass.config_entries.async_unload(entry.entry_id)
     attempts = fake_ble.establish.call_count
-    with pytest.raises(HomeAssistantError, match="not loaded"):
-        await hass.services.async_call(
-            "uplift_desk", "stop", {"config_entry_id": entry.entry_id}, blocking=True
-        )
+    await press_stop(hass, entry)
     assert client.writes == []
     assert fake_ble.establish.call_count == attempts
+
+
+async def test_stop_button_only_writes_to_the_selected_desk(
+    hass, fake_ble, loaded_desk, monkeypatch
+):
+    first_entry, first = loaded_desk
+    other_address = "AA:BB:CC:DD:EE:02"
+    other_device = FakeBLEDevice(other_address, "Other desk")
+
+    def resolve_device(hass, address):
+        if address == other_address:
+            return other_device
+        return fake_ble.device_from_address(hass, address)
+
+    monkeypatch.setattr(
+        "custom_components.uplift_desk.async_ble_device_from_address", resolve_device
+    )
+    monkeypatch.setattr(
+        "custom_components.uplift_desk.coordinator.async_ble_device_from_address",
+        resolve_device,
+    )
+    other_entry = MockConfigEntry(
+        domain="uplift_desk",
+        title="Other desk",
+        data={CONF_ADDRESS: other_address},
+        version=1,
+        minor_version=2,
+    )
+    other_entry.add_to_hass(hass)
+    second = fake_ble.client_with_services(build_service_collection(CONFIG))
+    fake_ble.queue_client(second)
+    try:
+        assert await hass.config_entries.async_setup(other_entry.entry_id)
+        await hass.async_block_till_done()
+        first.writes.clear()
+        second.writes.clear()
+
+        await press_stop(hass, first_entry)
+
+        assert first.writes == [(CONFIG.input_char_uuid, STOP_PACKET, False)]
+        assert second.writes == []
+        first.writes.clear()
+
+        await press_stop(hass, other_entry)
+
+        assert first.writes == []
+        assert second.writes == [(CONFIG.input_char_uuid, STOP_PACKET, False)]
+    finally:
+        await hass.config_entries.async_unload(other_entry.entry_id)
+
+
+@pytest.mark.parametrize("motion", ["preset", "height"])
+async def test_stop_button_cancels_motion_during_bluetooth_reconnect(
+    hass, fake_ble, loaded_desk, monkeypatch, motion
+):
+    entry, first = loaded_desk
+    coordinator = entry.runtime_data
+    second = fake_ble.client_with_services(build_service_collection(CONFIG))
+    fake_ble.queue_client(second)
+    connecting = asyncio.Event()
+    release = asyncio.Event()
+
+    async def held_connect(*args, **kwargs):
+        connecting.set()
+        await release.wait()
+        return await fake_ble.establish(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "custom_components.uplift_desk.coordinator.establish_connection", held_connect
+    )
+    pending = None
+    try:
+        first.simulate_disconnect()
+        await asyncio.wait_for(connecting.wait(), 3)
+        assert not coordinator.is_connected
+        assert hass.states.get(stop_entity_id(hass, entry)).state != STATE_UNAVAILABLE
+        preset_id = er.async_get(hass).async_get_entity_id(
+            "button", "uplift_desk", f"{entry.data[CONF_ADDRESS]}_desk_preset_1"
+        )
+        assert hass.states.get(preset_id).state == STATE_UNAVAILABLE
+        pending = asyncio.create_task(
+            coordinator.async_preset_2()
+            if motion == "preset"
+            else coordinator.async_move_to_height(900)
+        )
+        await asyncio.sleep(0)
+        attempts = fake_ble.establish.call_count
+
+        with pytest.raises(HomeAssistantError, match="no Stop packet"):
+            await press_stop(hass, entry)
+
+        assert fake_ble.establish.call_count == attempts
+        assert first.writes == []
+        assert coordinator.height_setpoint_mm is None
+        release.set()
+        await pending
+        await hass.async_block_till_done()
+        assert coordinator.is_connected
+        assert not any(packet[2] in (0x06, 0x1B, 0x2B) for _, packet, _ in second.writes)
+    finally:
+        release.set()
+        if pending is not None:
+            await asyncio.gather(pending, return_exceptions=True)
+
+
+async def test_stop_button_keeps_renamed_entity_and_device_after_reload(
+    hass, fake_ble, loaded_desk
+):
+    entry, _ = loaded_desk
+    registry = er.async_get(hass)
+    original = registry.async_update_entity(
+        stop_entity_id(hass, entry), new_entity_id="button.custom_desk_stop"
+    )
+    await hass.async_block_till_done()
+    second = fake_ble.client_with_services(build_service_collection(CONFIG))
+    fake_ble.queue_client(second)
+
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    current = registry.async_get(stop_entity_id(hass, entry))
+    assert current.entity_id == original.entity_id
+    assert current.id == original.id
+    assert current.device_id == original.device_id
+    second.writes.clear()
+    await press_stop(hass, entry)
+    assert second.writes == [(CONFIG.input_char_uuid, STOP_PACKET, False)]
 
 
 @pytest.mark.parametrize("waiting_for", ["wake", "controller"])
@@ -270,9 +417,7 @@ async def test_stop_clears_height_setpoint_entity(hass, loaded_desk):
     assert hass.states.get(entity_id).state == "900"
     client.writes.clear()
 
-    await hass.services.async_call(
-        "uplift_desk", "stop", {"config_entry_id": entry.entry_id}, blocking=True
-    )
+    await press_stop(hass, entry)
 
     assert client.writes == [(CONFIG.input_char_uuid, STOP_PACKET, False)]
     assert hass.states.get(entity_id).state == "unknown"

@@ -6,6 +6,9 @@
             }
         },
         "button":{
+            "desk_stop":{
+                "default": "mdi:stop-circle-outline"
+            },
             "desk_preset_1":{
                 "default": "mdi:numeric-1-box-outline"
             },

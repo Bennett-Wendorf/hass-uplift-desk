@@ -91,6 +91,9 @@
             }
         },
         "button": {
+            "desk_stop": {
+                "name": "Stop"
+            },
             "desk_preset_1": {
                 "name": "Move to Preset 1"
             },

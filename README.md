@@ -64,13 +64,14 @@ This integration relies on the uplift-ble Python package, which can be found on 
 
 > Normally, an advanced keypad with programmable buttons is required to use this integration (to set the presets the integration exposes). However, for users without an advanced keypad, the desk can still be programmed with preset values using the cli provided by the [uplift-ble](https://github.com/librick/uplift-ble) to set the preset values. 
 
-The integration currently provides 6 entities:
+The integration currently provides up to 7 entities:
 1. A sensor for the current height of the desk. This will update automatically as your desk is moving, though it is not instantaneous and should not be relied on for safety.
 2. A button to move the desk to its configured preset 1.
 3. A button to move the desk to its configured preset 2.
 4. A disabled-by-default button to move supported desks to configured preset 3.
 5. A disabled-by-default button to move supported desks to configured preset 4.
 6. A number to move the desk to a specific height (the Height Setpoint).
+7. A Stop button to stop movement and cancel pending preset or height requests.
 
 Preset 3 and 4 buttons are currently limited to the verified `0x00FF`,
 `0xFE60`, and `0xFF00` connected GATT profiles. Some V3 adapters advertise
@@ -117,20 +118,26 @@ another connection attempt.
 
 ### Stop Movement
 
-The `uplift_desk.stop` action stops one configured desk and cancels its pending
-preset and height setpoint requests. It also clears the displayed height target.
-Select the desk using `config_entry_id`; no extra entity or height reading is
-required.
+Each desk has an enabled-by-default **Stop** button alongside its preset
+controls. Press it in Home Assistant, or use `button.press` from an automation
+or Companion, targeting that desk's Stop entity. It cancels pending preset and
+height setpoint requests and clears the displayed height target. No height
+reading is required.
 
 ```yaml
-action: uplift_desk.stop
-data:
-  config_entry_id: YOUR_DESK_CONFIG_ENTRY_ID
+action: button.press
+target:
+  entity_id: button.your_desk_stop
 ```
 
+Use the actual Stop entity ID from your desk's device page. Development versions
+that used `uplift_desk.stop` should update their callers to `button.press`;
+the custom action is replaced by this button.
+
 Stop uses the existing Bluetooth connection and skips wake packets and
-notification waits. If the desk is disconnected, the action reports that no
-Stop packet was sent and does not queue a delayed Stop for a later reconnect.
+notification waits. The button stays available during reconnects so it can
+cancel pending movement. If the desk is disconnected, the action reports that
+no Stop packet was sent and does not queue a delayed Stop for a later reconnect.
 An explicit preset or height setpoint request made after Stop can still move
 the desk. Keep the physical keypad available; Bluetooth Stop is not an
 emergency-stop circuit.
