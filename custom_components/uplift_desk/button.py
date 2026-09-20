@@ -27,6 +27,7 @@ async def async_setup_entry(
     buttons: list[ButtonEntity] = [
         UpliftDeskPreset1Button(config_entry.runtime_data),
         UpliftDeskPreset2Button(config_entry.runtime_data),
+        UpliftDeskStopButton(config_entry.runtime_data),
     ]
     if config_entry.runtime_data.supports_extended_presets:
         buttons.extend([
@@ -34,6 +35,39 @@ async def async_setup_entry(
             UpliftDeskPreset4Button(config_entry.runtime_data),
         ])
     async_add_entities(buttons)
+
+class UpliftDeskStopButton(
+    CoordinatorEntity[UpliftDeskBluetoothCoordinator],
+    ButtonEntity):
+    """Stop one desk and cancel its pending motion, including during reconnect."""
+
+    entity_description = ButtonEntityDescription(
+        key="desk_stop",
+        translation_key="desk_stop",
+        has_entity_name=True,
+    )
+
+    def __init__(self, coordinator: UpliftDeskBluetoothCoordinator) -> None:
+        """Initialize the Stop button."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.desk_address}_{self.entity_description.key}"
+
+    @property
+    def device_info(self):
+        """Link Stop to the same device as the desk's other controls."""
+        return {"identifiers": {(DOMAIN, self.coordinator.desk_address)}, "name": self.coordinator.desk_name}
+
+    @property
+    def available(self) -> bool:
+        """Allow cancelling pending motion even while Bluetooth is disconnected."""
+        # HA removes the entity when its config entry unloads. While loaded,
+        # cancellation must remain callable; the coordinator reports when it
+        # cannot send a physical Stop without queuing one for reconnect.
+        return True
+
+    async def async_press(self) -> None:
+        """Cancel pending motion and send Stop on the existing connection."""
+        await self.coordinator.async_stop_movement()
 
 class UpliftDeskPreset1Button(
     CoordinatorEntity[UpliftDeskBluetoothCoordinator],
