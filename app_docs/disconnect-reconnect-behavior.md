@@ -60,9 +60,10 @@ Step by step:
    does **not** trigger a reconnect.
 
 2. **The desk immediately shows as unavailable.**
-   The height sensor and all preset buttons flip to *unavailable* the moment
-   the link is gone. You will see the sensor value disappear (rather than a
-   stale, frozen number), which is the honest state: the desk is down.
+   The height sensor, the Height Setpoint number, and all preset buttons flip
+   to *unavailable* the moment the link is gone. You will see the sensor value
+   disappear (rather than a stale, frozen number), which is the honest state:
+   the desk is down.
 
 3. **Automatic reconnection begins, with a bounded wait between tries.**
    The integration retries the full connect cycle on a backoff schedule:

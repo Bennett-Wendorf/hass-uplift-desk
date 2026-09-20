@@ -1,7 +1,7 @@
 stop:
   name: Stop
   description: >-
-    Cancel pending preset requests and stop movement over the desk's active
+    Cancel pending preset and height requests and stop movement over the desk's active
     Bluetooth connection. If disconnected, no delayed reconnect is attempted;
     use the physical keypad. This is not an emergency-stop system.
   fields:

@@ -81,8 +81,9 @@ async def test_unloaded_stop_target_does_not_connect(hass, fake_ble, loaded_desk
 
 
 @pytest.mark.parametrize("waiting_for", ["wake", "controller"])
-async def test_stop_cancels_a_preset_waiting_before_its_write(
-    loaded_desk, monkeypatch, waiting_for
+@pytest.mark.parametrize("motion", ["preset", "height"])
+async def test_stop_cancels_motion_waiting_before_its_write(
+    loaded_desk, monkeypatch, waiting_for, motion
 ):
     entry, client = loaded_desk
     coordinator = entry.runtime_data
@@ -101,20 +102,26 @@ async def test_stop_cancels_a_preset_waiting_before_its_write(
         monkeypatch.setattr(
             coordinator, "_get_or_establish_controller", wait_before_write
         )
-    pending = asyncio.create_task(coordinator.async_preset_2())
+    pending = asyncio.create_task(
+        coordinator.async_preset_2()
+        if motion == "preset"
+        else coordinator.async_move_to_height(900)
+    )
     try:
         await asyncio.wait_for(entered.wait(), 3)
         await coordinator.async_stop_movement()
         release.set()
         await pending
         assert client.writes == [(CONFIG.input_char_uuid, STOP_PACKET, False)]
+        assert coordinator.height_setpoint_mm is None
     finally:
         release.set()
         await pending
 
 
+@pytest.mark.parametrize("motion, opcode", [("preset", 0x05), ("height", 0x1B)])
 async def test_stop_follows_an_in_flight_write_and_cancels_a_queued_recall(
-    loaded_desk, monkeypatch
+    loaded_desk, monkeypatch, motion, opcode
 ):
     entry, client = loaded_desk
     coordinator = entry.runtime_data
@@ -124,13 +131,17 @@ async def test_stop_follows_an_in_flight_write_and_cancels_a_queued_recall(
     monkeypatch.setattr(coordinator._desk, "wake", AsyncMock())
 
     async def held_write(characteristic, packet, response=False):
-        if packet[2] == 0x05:
+        if packet[2] == opcode:
             entered.set()
             await release.wait()
         await original_write(characteristic, packet, response=response)
 
     monkeypatch.setattr(client, "write_gatt_char", held_write)
-    first = asyncio.create_task(coordinator.async_preset_1())
+    first = asyncio.create_task(
+        coordinator.async_preset_1()
+        if motion == "preset"
+        else coordinator.async_move_to_height(900)
+    )
     tasks = [first]
     try:
         await asyncio.wait_for(entered.wait(), 3)
@@ -140,7 +151,8 @@ async def test_stop_follows_an_in_flight_write_and_cancels_a_queued_recall(
         await asyncio.sleep(0)
         release.set()
         await asyncio.gather(*tasks)
-        assert [packet[2] for _, packet, _ in client.writes] == [0x05, 0x2B]
+        assert [packet[2] for _, packet, _ in client.writes] == [opcode, 0x2B]
+        assert coordinator.height_setpoint_mm is None
     finally:
         release.set()
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -218,10 +230,12 @@ async def test_a_later_explicit_preset_keeps_the_stock_wake_sequence(loaded_desk
     assert [packet[2] for _, packet, _ in client.writes] == [0x2B, 0, 0, 0, 0x27]
 
 
-async def test_unload_cancels_a_recall_that_is_still_waking(
-    hass, loaded_desk, monkeypatch
+@pytest.mark.parametrize("motion", ["preset", "height"])
+async def test_unload_cancels_motion_that_is_still_waking(
+    hass, loaded_desk, monkeypatch, motion
 ):
     entry, client = loaded_desk
+    coordinator = entry.runtime_data
     entered = asyncio.Event()
     release = asyncio.Event()
 
@@ -229,14 +243,75 @@ async def test_unload_cancels_a_recall_that_is_still_waking(
         entered.set()
         await release.wait()
 
-    monkeypatch.setattr(entry.runtime_data._desk, "wake", held_wake)
-    pending = asyncio.create_task(entry.runtime_data.async_preset_4())
+    monkeypatch.setattr(coordinator._desk, "wake", held_wake)
+    pending = asyncio.create_task(
+        coordinator.async_preset_4()
+        if motion == "preset"
+        else coordinator.async_move_to_height(900)
+    )
     try:
         await asyncio.wait_for(entered.wait(), 3)
         assert await hass.config_entries.async_unload(entry.entry_id)
         release.set()
         await pending
         assert client.writes == []
+        assert coordinator.height_setpoint_mm is None
     finally:
         release.set()
         await pending
+
+
+async def test_stop_clears_height_setpoint_entity(hass, loaded_desk):
+    entry, client = loaded_desk
+    entity_id = er.async_get(hass).async_get_entity_id(
+        "number", "uplift_desk", f"{entry.runtime_data.desk_address}_desk_height_setpoint"
+    )
+    await entry.runtime_data.async_move_to_height(900)
+    assert hass.states.get(entity_id).state == "900"
+    client.writes.clear()
+
+    await hass.services.async_call(
+        "uplift_desk", "stop", {"config_entry_id": entry.entry_id}, blocking=True
+    )
+
+    assert client.writes == [(CONFIG.input_char_uuid, STOP_PACKET, False)]
+    assert hass.states.get(entity_id).state == "unknown"
+
+
+async def test_failed_height_write_after_stop_does_not_restore_old_target(
+    loaded_desk, monkeypatch
+):
+    entry, client = loaded_desk
+    coordinator = entry.runtime_data
+    await coordinator.async_move_to_height(800)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def failed_wake():
+        entered.set()
+        await release.wait()
+        raise BleakError("wake failed")
+
+    monkeypatch.setattr(coordinator._desk, "wake", failed_wake)
+    pending = asyncio.create_task(coordinator.async_move_to_height(900))
+    try:
+        await asyncio.wait_for(entered.wait(), 3)
+        await coordinator.async_stop_movement()
+        release.set()
+        with pytest.raises(BleakError, match="wake failed"):
+            await pending
+        assert coordinator.height_setpoint_mm is None
+    finally:
+        release.set()
+        await asyncio.gather(pending, return_exceptions=True)
+
+
+async def test_a_later_explicit_height_command_keeps_the_stock_packet_and_wake(
+    loaded_desk
+):
+    entry, client = loaded_desk
+    await entry.runtime_data.async_stop_movement()
+    await entry.runtime_data.async_move_to_height(900)
+    assert [packet[2] for _, packet, _ in client.writes] == [0x2B, 0, 0, 0, 0x1B]
+    assert client.writes[-1][1][4:6] == (900).to_bytes(2, "big")
+    assert entry.runtime_data.height_setpoint_mm == 900

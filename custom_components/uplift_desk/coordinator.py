@@ -20,12 +20,19 @@ from uplift_ble.desk_configs import DESK_CONFIGS_BY_SERVICE, DeskConfig, DeskVar
 from uplift_ble.desk_controller import DeskController, command_writer
 from uplift_ble.desk_enums import (
     DeskEventType,
+    DeskLockStatus,
     DeskUnit,
 )
 from uplift_ble.models import DiscoveredDesk as ValidatedDesk
 
 from .models import DiscoveredDesk
-from .const import CONF_FALLBACK_UNIT, CONF_QUERY_ON_CONNECT, FALLBACK_UNIT_NONE
+from .const import (
+    CONF_FALLBACK_UNIT,
+    CONF_QUERY_ON_CONNECT,
+    FALLBACK_UNIT_NONE,
+    HEIGHT_SETPOINT_ARRIVAL_TOLERANCE_MM,
+    HEIGHT_SETPOINT_INTERRUPTION_EPSILON_MM,
+)
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
@@ -39,6 +46,14 @@ _EXTENDED_PRESET_VARIANTS = {
 
 class UpliftDeskServicesError(BleakError):
     """Raised when a connected client still lacks the required GATT characteristics."""
+
+
+class UpliftDeskMoveInFlightError(HomeAssistantError):
+    """Raised when a move command is already in flight for the desk."""
+
+
+class UpliftDeskLockedError(HomeAssistantError):
+    """Raised when the desk is locked and cannot be moved."""
 
 
 _RECONNECT_BACKOFF_SECONDS: tuple[int, ...] = (5, 10, 20, 30)
@@ -80,6 +95,10 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         self._query_on_connect = config_entry.options.get(CONF_QUERY_ON_CONNECT, True)
         self._desk_variant: DeskVariant | None = None
         self.height_mm: float | None = None
+        self._height_setpoint_mm: int | None = None
+        self.height_limit_min_mm: int | None = None
+        self.height_limit_max_mm: int | None = None
+        self._move_in_flight: bool = False
         self.keypad_display_units = None
         self._reconnect_task: "asyncio.Future | None" = None
         self._intentional_disconnect: bool = False
@@ -278,6 +297,18 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
                     desk_config=desk_config,
                 ).create_controller(client, fallback_unit=self._fallback_unit)
                 controller.on(DeskEventType.HEIGHT, self._async_height_notify_callback)
+                controller.on(
+                    DeskEventType.HEIGHT_LIMITS_CONFIGURATION,
+                    self._async_height_limits_configuration_callback,
+                )
+                controller.on(
+                    DeskEventType.HEIGHT_LIMIT_MAX,
+                    self._async_height_limit_max_callback,
+                )
+                controller.on(
+                    DeskEventType.HEIGHT_LIMIT_MIN,
+                    self._async_height_limit_min_callback,
+                )
                 try:
                     await controller.start()  # once per fresh controller
                 except TimeoutError:
@@ -356,6 +387,18 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
             if self._desk is None or self._desk.client is not client:
                 return
             await self._stop_current_controller()
+            # The link is gone, so the commanded target is no longer being
+            # tracked; clear it so the same push below delivers both the
+            # unavailability and the setpoint clear.
+            self._height_setpoint_mm = None
+            _LOGGER.debug(
+                "Cleared height setpoint for desk %s on unexpected disconnect",
+                self.desk_info,
+            )
+            # The cached position is invalid once the link is gone: the first
+            # height notification after a (re)connect must not reconcile the
+            # setpoint against a stale pre-disconnect height.
+            self.height_mm = None
             # With self._desk now None, push unavailability to the entities.
             self.async_update_listeners()
             self._start_reconnect_loop()
@@ -413,6 +456,11 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
     def supports_extended_presets(self):
         return self._desk_variant in _EXTENDED_PRESET_VARIANTS
 
+    @property
+    def height_setpoint_mm(self) -> int | None:
+        """The height (mm) the desk was last commanded to move to, or None."""
+        return self._height_setpoint_mm
+
     async def async_connect(self):
         # Initial setup reads units+height itself (with strict error handling in
         # async_setup_entry), so skip the redundant best-effort refresh here.
@@ -422,6 +470,15 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         """Tear down cleanly on unload: cancel reconnects, stop, disconnect, drop the controller."""
         self._intentional_disconnect = True
         self._motion_generation += 1
+        # Defensive: entity platforms are already unloaded before
+        # async_unload_entry calls this, so no listener push is needed.
+        self._height_setpoint_mm = None
+        _LOGGER.debug(
+            "Cleared height setpoint for desk %s on disconnect",
+            self.desk_info,
+        )
+        # The cached position is invalid once the link is gone.
+        self.height_mm = None
         reconnect_task = self._reconnect_task
         self._reconnect_task = None
         try:
@@ -477,28 +534,39 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         """Discard a pending recall if Stop or unload supersedes it."""
         generation = self._motion_generation
         controller = await self._get_or_establish_controller()
+        await self._async_write_motion(
+            controller, f"move_to_height_preset_{slot}", generation
+        )
+
+    async def _async_write_motion(
+        self, controller: DeskController, name: str, generation: int, *args
+    ) -> bool:
+        """Write motion only if it has not been superseded by Stop or unload."""
         # Preserve 0.7.0's wake sequence outside the final-write lock, so a
         # slow wake or reconnect cannot hold Stop behind a later motion write.
         if controller.requires_wake:
             for _ in range(3):
                 if generation != self._motion_generation or self._intentional_disconnect:
-                    return
+                    return False
                 await controller.wake()
                 await asyncio.sleep(0.1)
         async with self._motion_write_lock:
             if generation != self._motion_generation or self._intentional_disconnect:
-                return
-            await self._async_command_only(controller, f"move_to_height_preset_{slot}")
+                return False
+            await self._async_command_only(controller, name, *args)
+            return True
 
     @staticmethod
-    async def _async_command_only(controller: DeskController, name: str) -> None:
+    async def _async_command_only(controller: DeskController, name: str, *args) -> None:
         """Keep the library's packet definition while omitting wake and waits."""
         definition = getattr(DeskController, name).__wrapped__
-        await command_writer(skip_wake=True)(definition)(controller)
+        await command_writer(skip_wake=True)(definition)(controller, *args)
 
     async def async_stop_movement(self) -> None:
-        """Cancel pending recalls and send Stop only on the existing connection."""
+        """Cancel pending motion and send Stop only on the existing connection."""
         self._motion_generation += 1
+        self._height_setpoint_mm = None
+        self.async_update_listeners()
         controller = self._desk if self.is_connected else None
         async with self._motion_write_lock:
             if (
@@ -508,7 +576,7 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
                 or not self.is_connected
             ):
                 raise HomeAssistantError(
-                    "Desk connection changed or is unavailable; pending presets were cancelled, "
+                    "Desk connection changed or is unavailable; pending motion was cancelled, "
                     "but no Stop packet was sent. Use the desk keypad."
                 )
             try:
@@ -521,9 +589,153 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
     async def async_wake(self):
         await (await self._get_or_establish_controller()).wake()
 
-    def _async_height_notify_callback(self, height_mm: int):
-        self.height_mm: int =  height_mm
-        _LOGGER.debug("Height notify callback received height: %d mm", self.height_mm)
+    async def async_move_to_height(self, height_mm: int | float) -> None:
+        """Command the desk to move to a specific height (mm).
+
+        At most one move command may be in flight (coalescing, below);
+        a second concurrent set raises UpliftDeskMoveInFlightError. The
+        in-flight window covers the command write plus any (re)connect
+        cycle needed to reach a disconnected desk, so it can last well
+        longer than the BLE write itself.
+        Raises UpliftDeskLockedError if the desk last reported LOCKED.
+
+        The commanded target is stored as the height setpoint *before* the
+        write (optimistic), so the Height Setpoint entity shows the target
+        immediately - even while a (re)connect cycle is still in progress -
+        and height notifications reconcile it away as the desk arrives or is
+        interrupted. Stop or unload cancels a pending write and clears its
+        target. Otherwise, a failed command restores the previous setpoint so
+        a failed set never leaves a stale target.
+        """
+        # Reject (not queue) a second concurrent set: the check-and-set below
+        # has no await between them, so it is race-free on the HA event loop.
+        if self._move_in_flight:
+            raise UpliftDeskMoveInFlightError(
+                f"A move command for desk {self.desk_info} is in flight, or the desk is "
+                "reconnecting; try again shortly"
+            )
+        self._move_in_flight = True
+        generation = self._motion_generation
+        target_mm = int(round(height_mm))
+        previous_setpoint_mm = self._height_setpoint_mm
+        # Optimistic: show the commanded target immediately, even while a
+        # (re)connect cycle is still in progress.
+        self._height_setpoint_mm = target_mm
+        self.async_set_updated_data(self._desk)
+        try:
+            controller = await self._get_or_establish_controller()
+            if controller.lock_status is DeskLockStatus.LOCKED:
+                raise UpliftDeskLockedError(
+                    f"Desk {self.desk_info} is locked; unlock it before moving"
+                )
+            # A lock_status of None means the desk has not reported one since
+            # connect; proceed — the firmware rejects a move if truly locked.
+            if not await self._async_write_motion(
+                controller, "move_to_specified_height", generation, target_mm
+            ):
+                return
+            _LOGGER.debug(
+                "Commanded desk %s to move to %d mm", self.desk_info, target_mm
+            )
+            if (
+                self.height_mm is not None
+                and abs(self.height_mm - target_mm)
+                <= HEIGHT_SETPOINT_ARRIVAL_TOLERANCE_MM
+            ):
+                # Desk already at (within tolerance of) the commanded height:
+                # nothing left to track.
+                self._height_setpoint_mm = None
+                self.async_update_listeners()
+        except Exception:
+            # Command failed (write error, locked, reconnect failure): restore
+            # the previous setpoint so a failed set never leaves a stale target.
+            # A concurrent Stop or unload has already cancelled this target;
+            # do not resurrect an older one when the pending command fails.
+            if generation == self._motion_generation and not self._intentional_disconnect:
+                self._height_setpoint_mm = previous_setpoint_mm
+                self.async_update_listeners()
+            raise
+        finally:
+            self._move_in_flight = False
+
+    def _async_height_notify_callback(self, height_mm: float) -> None:
+        previous_height_mm = self.height_mm
+        self.height_mm = height_mm
+        self._reconcile_height_setpoint(previous_height_mm, height_mm)
+        _LOGGER.debug("Height notify callback received height: %s mm", height_mm)
+        self.async_set_updated_data(self._desk)
+
+    def _reconcile_height_setpoint(
+        self, previous_height_mm: float | None, height_mm: float
+    ) -> None:
+        """Reconcile the active setpoint against a fresh height report.
+
+        Clears the setpoint on arrival (the reported height is within the
+        arrival tolerance of the target, or the desk crossed the target
+        between two notifications) or on interruption (the desk moved away
+        from the target by more than the jitter epsilon - keypad, preset,
+        or any other control).
+        """
+        setpoint_mm = self._height_setpoint_mm
+        if setpoint_mm is None:
+            return
+        # Arrival: reported height within tolerance of the target.
+        if abs(height_mm - setpoint_mm) <= HEIGHT_SETPOINT_ARRIVAL_TOLERANCE_MM:
+            self._height_setpoint_mm = None
+            _LOGGER.debug(
+                "Desk %s arrived at setpoint %d mm (reported %s mm)",
+                self.desk_info,
+                setpoint_mm,
+                height_mm,
+            )
+            return
+        if previous_height_mm is None:
+            return
+        # Arrival: the desk crossed the target between two notifications.
+        if (previous_height_mm - setpoint_mm) * (height_mm - setpoint_mm) < 0:
+            self._height_setpoint_mm = None
+            _LOGGER.debug(
+                "Desk %s crossed setpoint %d mm (%s -> %s mm)",
+                self.desk_info,
+                setpoint_mm,
+                previous_height_mm,
+                height_mm,
+            )
+            return
+        # Interruption: desk moved away from the target (keypad/preset/etc.).
+        delta = height_mm - previous_height_mm
+        to_target = setpoint_mm - previous_height_mm
+        if (
+            abs(delta) > HEIGHT_SETPOINT_INTERRUPTION_EPSILON_MM
+            and delta * to_target < 0
+        ):
+            self._height_setpoint_mm = None
+            _LOGGER.debug(
+                "Desk %s moved away from setpoint %d mm (%s -> %s mm)",
+                self.desk_info,
+                setpoint_mm,
+                previous_height_mm,
+                height_mm,
+            )
+
+    def _async_height_limits_configuration_callback(self, max_mm: int, min_mm: int) -> None:
+        self.height_limit_max_mm = max_mm
+        self.height_limit_min_mm = min_mm
+        _LOGGER.debug(
+            "Height limits configuration callback received max: %d mm, min: %d mm",
+            max_mm,
+            min_mm,
+        )
+        self.async_set_updated_data(self._desk)
+
+    def _async_height_limit_max_callback(self, max_mm: int) -> None:
+        self.height_limit_max_mm = max_mm
+        _LOGGER.debug("Height limit max callback received max: %d mm", max_mm)
+        self.async_set_updated_data(self._desk)
+
+    def _async_height_limit_min_callback(self, min_mm: int) -> None:
+        self.height_limit_min_mm = min_mm
+        _LOGGER.debug("Height limit min callback received min: %d mm", min_mm)
         self.async_set_updated_data(self._desk)
 
 

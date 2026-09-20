@@ -24,7 +24,7 @@ from .coordinator import (
     Uplift_Desk_DeskConfigEntry,
 )
 
-_PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.BUTTON]
+_PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.BUTTON, Platform.NUMBER]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 _LOGGER = logging.getLogger(__name__)

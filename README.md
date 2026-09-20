@@ -64,12 +64,13 @@ This integration relies on the uplift-ble Python package, which can be found on 
 
 > Normally, an advanced keypad with programmable buttons is required to use this integration (to set the presets the integration exposes). However, for users without an advanced keypad, the desk can still be programmed with preset values using the cli provided by the [uplift-ble](https://github.com/librick/uplift-ble) to set the preset values. 
 
-The integration currently provides 5 entities:
+The integration currently provides 6 entities:
 1. A sensor for the current height of the desk. This will update automatically as your desk is moving, though it is not instantaneous and should not be relied on for safety.
 2. A button to move the desk to its configured preset 1.
 3. A button to move the desk to its configured preset 2.
 4. A disabled-by-default button to move supported desks to configured preset 3.
 5. A disabled-by-default button to move supported desks to configured preset 4.
+6. A number to move the desk to a specific height (the Height Setpoint).
 
 Preset 3 and 4 buttons are currently limited to the verified `0x00FF`,
 `0xFE60`, and `0xFF00` connected GATT profiles. Some V3 adapters advertise
@@ -105,7 +106,7 @@ The **Query units and limits on connect** option is enabled by default. Turn it
 off for desks that do not support those queries. With it disabled, startup and
 reconnection only subscribe to notifications; height stays unknown until the
 desk reports it. Select a fallback height unit if the desk does not report its
-units. Explicit preset and Stop actions remain available.
+units. Explicit preset, height setpoint, and Stop actions remain available.
 
 If notification subscription times out, the integration attempts to clear the
 desk's service cache through the selected Bluetooth backend before disconnecting
@@ -117,8 +118,9 @@ another connection attempt.
 ### Stop Movement
 
 The `uplift_desk.stop` action stops one configured desk and cancels its pending
-preset recalls. Select the desk using `config_entry_id`; no extra entity or
-height reading is required.
+preset and height setpoint requests. It also clears the displayed height target.
+Select the desk using `config_entry_id`; no extra entity or height reading is
+required.
 
 ```yaml
 action: uplift_desk.stop
@@ -129,8 +131,9 @@ data:
 Stop uses the existing Bluetooth connection and skips wake packets and
 notification waits. If the desk is disconnected, the action reports that no
 Stop packet was sent and does not queue a delayed Stop for a later reconnect.
-An explicit preset request made after Stop can still move the desk. Keep the
-physical keypad available; Bluetooth Stop is not an emergency-stop circuit.
+An explicit preset or height setpoint request made after Stop can still move
+the desk. Keep the physical keypad available; Bluetooth Stop is not an
+emergency-stop circuit.
 
 <!-- CONTRIBUTING -->
 ## Contributing
