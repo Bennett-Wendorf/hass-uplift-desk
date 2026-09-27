@@ -112,5 +112,10 @@
                 "name": "Height Setpoint"
             }
         }
+    },
+    "exceptions": {
+        "device_not_found_error": {
+            "message": "Could not find Uplift Desk with address {address}"
+        }
     }
 }
