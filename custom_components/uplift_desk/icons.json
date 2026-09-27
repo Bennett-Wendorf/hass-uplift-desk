@@ -5,21 +5,26 @@
                 "default": "mdi:human-male-height-variant"
             }
         },
-        "binary_sensor":{
-            "desk_moving":{
-                "default": "mdi:arrow-expand-vertical",
-                "state" : {
-                    "on": "mdi:arrow-expand-vertical",
-                    "off": "mdi:octagon-outline"
-                }
+        "button":{
+            "desk_stop":{
+                "default": "mdi:stop-circle-outline"
+            },
+            "desk_preset_1":{
+                "default": "mdi:numeric-1-box-outline"
+            },
+            "desk_preset_2":{
+                "default": "mdi:numeric-2-box-outline"
+            },
+            "desk_preset_3":{
+                "default": "mdi:numeric-3-box-outline"
+            },
+            "desk_preset_4":{
+                "default": "mdi:numeric-4-box-outline"
             }
         },
-        "button":{
-            "desk_sit":{
-                "default": "mdi:arrow-expand-down"
-            },
-            "desk_stand":{
-                "default": "mdi:arrow-expand-up"
+        "number":{
+            "desk_height_setpoint":{
+                "default": "mdi:arrow-up-down"
             }
         }
     }

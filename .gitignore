@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Git worktrees
+.worktrees/
+
 # C extensions
 *.so
 
@@ -130,6 +133,7 @@ celerybeat.pid
 # Environments
 .env
 .venv
+.venv-test/
 env/
 venv/
 ENV/

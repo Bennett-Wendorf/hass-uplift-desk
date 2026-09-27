@@ -1,61 +1,73 @@
-"""The uplift desk Bluetooth integration."""
+"""The Uplift Desk integration."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import asyncio
 import logging
 
-from uplift import Desk
+from homeassistant.components.bluetooth import async_ble_device_from_address
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
-from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
-
-from homeassistant.helpers.update_coordinator import (
-    CoordinatorEntity,
-    DataUpdateCoordinator,
-    UpdateFailed,
-)
-
-from homeassistant.core import CoreState, HomeAssistant
-from homeassistant.helpers.dispatcher import async_dispatcher_send
-
-from bleak import BleakClient
+from bleak import BleakError
 from bleak.backends.device import BLEDevice
 from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
+from bleak_retry_connector.bluez import clear_cache
 
-from .const import DOMAIN
+from uplift_ble.desk_configs import DESK_CONFIGS_BY_SERVICE, DeskConfig, DeskVariant
+from uplift_ble.desk_controller import DeskController, command_writer
+from uplift_ble.desk_enums import (
+    DeskEventType,
+    DeskLockStatus,
+    DeskUnit,
+)
+from uplift_ble.models import DiscoveredDesk as ValidatedDesk
 
-type Uplift_Desk_DeskConfigEntry = ConfigEntry[UpliftDeskBluetoothCoordinator]  # noqa: F821
+from .models import DiscoveredDesk
+from .const import (
+    CONF_FALLBACK_UNIT,
+    CONF_QUERY_ON_CONNECT,
+    FALLBACK_UNIT_NONE,
+    HEIGHT_SETPOINT_ARRIVAL_TOLERANCE_MM,
+    HEIGHT_SETPOINT_INTERRUPTION_EPSILON_MM,
+)
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
-def process_service_info(
-    hass: HomeAssistant,
-    entry: Uplift_Desk_DeskConfigEntry,
-    service_info: BluetoothServiceInfoBleak,
-) -> SensorUpdate:
-    """Process a BluetoothServiceInfoBleak, running side effects and returning sensor data."""
-    coordinator = entry.runtime_data
-    data = coordinator.device_data
-    update = data.update(service_info)
-    if not coordinator.model_info and (device_type := data.device_type):
-        hass.config_entries.async_update_entry(
-            entry, data={**entry.data, CONF_DEVICE_TYPE: device_type}
-        )
-        coordinator.set_model_info(device_type)
-    if update.events and hass.state is CoreState.running:
-        # Do not fire events on data restore
-        address = service_info.device.address
-        for event in update.events.values():
-            key = event.device_key.key
-            signal = format_event_dispatcher_name(address, key)
-            async_dispatcher_send(hass, signal)
-
-    return update
+_EXTENDED_PRESET_VARIANTS = {
+    DeskVariant.JIECANG_0x00FF,
+    DeskVariant.JIECANG_0xFE60,
+    # Some V3 adapters advertise 0x00FF but expose 0xFF00 after connecting.
+    DeskVariant.JIECANG_0xFF00,
+}
 
 
-def format_event_dispatcher_name(address: str, key: str) -> str:
-    """Format an event dispatcher name."""
-    return f"{DOMAIN}_{address}_{key}"
+class UpliftDeskServicesError(BleakError):
+    """Raised when a connected client still lacks the required GATT characteristics."""
+
+
+class UpliftDeskMoveInFlightError(HomeAssistantError):
+    """Raised when a move command is already in flight for the desk."""
+
+
+class UpliftDeskLockedError(HomeAssistantError):
+    """Raised when the desk is locked and cannot be moved."""
+
+
+_RECONNECT_BACKOFF_SECONDS: tuple[int, ...] = (5, 10, 20, 30)
+
+
+def _parse_fallback_unit(value: str | None) -> DeskUnit | None:
+    """Parse an explicit fallback without guessing for invalid values."""
+    if value is None or value == FALLBACK_UNIT_NONE:
+        return None
+    try:
+        return DeskUnit(value)
+    except ValueError:
+        _LOGGER.warning("Ignoring invalid fallback unit: %s", value)
+        return None
 
 
 class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
@@ -65,65 +77,666 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         self,
         hass: HomeAssistant,
         config_entry: Uplift_Desk_DeskConfigEntry,
-        ble_device: BLEDevice
+        desk_ble_device: BLEDevice
     ) -> None:
         """Initialize the Data Coordinator."""
         super().__init__(hass, _LOGGER, name="Uplift Desk", config_entry=config_entry)
+        _LOGGER.debug("Initializing coordinator for desk %s:%s with config entry %s", config_entry.title, desk_ble_device.address, config_entry)
 
-        desk = Desk(ble_device.address, config_entry.title)
-        _LOGGER.debug("Initializing coordinator for desk %s with config entry %s", desk, config_entry)
+        self._discovered_desk = DiscoveredDesk(name=config_entry.title, address=desk_ble_device.address)
+        self._desk_ble_device = desk_ble_device
+        self._desk = None
+        self._desk_lock = asyncio.Lock()
+        self._motion_write_lock = asyncio.Lock()
+        self._motion_generation = 0
+        self._fallback_unit = _parse_fallback_unit(
+            config_entry.options.get(CONF_FALLBACK_UNIT)
+        )
+        self._query_on_connect = config_entry.options.get(CONF_QUERY_ON_CONNECT, True)
+        self._desk_variant: DeskVariant | None = None
+        self.height_mm: float | None = None
+        self._height_setpoint_mm: int | None = None
+        self.height_limit_min_mm: int | None = None
+        self.height_limit_max_mm: int | None = None
+        self._move_in_flight: bool = False
+        self.keypad_display_units = None
+        self._reconnect_task: "asyncio.Future | None" = None
+        self._intentional_disconnect: bool = False
 
-        self._ble_device = ble_device
+    def _resolve_ble_device(self) -> BLEDevice:
+        """Resolve a fresh BLEDevice from the HA bluetooth registry, falling back to last known."""
+        device = async_ble_device_from_address(self.hass, self.desk_address)
+        if device is not None:
+            if device is not self._desk_ble_device:
+                _LOGGER.debug("Resolved fresh BLEDevice for %s (D-Bus path may have changed)", self.desk_address)
+            self._desk_ble_device = device
+            return device
+        _LOGGER.debug("No fresh BLEDevice for %s; falling back to last known device", self.desk_address)
+        return self._desk_ble_device
 
-        self._desk = desk
-        self._desk.register_callback(self._async_height_notify_callback)
+    def _validate_client_services(self, client) -> DeskConfig | None:
+        """Validate a connected client's GATT services before building a controller.
 
-    @property
-    def desk_address(self):
-        return self._desk.address
+        Returns the resolved DeskConfig, or None when the client does not
+        expose the desk's service/characteristics (triggering a cache clear).
+        """
+        try:
+            services = client.services
+        except BleakError as err:
+            # e.g. "Service Discovery has not been performed yet" — the
+            # backend collection may also be a non-raiseable empty set.
+            _LOGGER.warning(
+                "Could not read services from connected client for %s: %s",
+                self.desk_address,
+                err,
+            )
+            return None
+
+        # BleakGATTServiceCollection has no __bool__/__len__; materialize it.
+        service_list = list(services)
+        _LOGGER.debug(
+            "Connected client for %s exposes %d service(s): %s",
+            self.desk_address,
+            len(service_list),
+            [service.uuid for service in service_list],
+        )
+
+        for service in service_list:
+            desk_config = DESK_CONFIGS_BY_SERVICE.get(service.uuid)
+            if desk_config is None:
+                continue
+
+            missing = [
+                char_uuid
+                for char_uuid in (
+                    desk_config.input_char_uuid,
+                    desk_config.output_char_uuid,
+                    desk_config.name_char_uuid,
+                )
+                if services.get_characteristic(char_uuid) is None
+            ]
+            if missing:
+                _LOGGER.warning(
+                    "Desk service %s found for %s but missing required characteristic(s): %s",
+                    service.uuid,
+                    self.desk_address,
+                    missing,
+                )
+                return None
+
+            _LOGGER.debug(
+                "Validated desk service %s (%s) on connected client for %s",
+                service.uuid,
+                desk_config.desk_variant,
+                self.desk_address,
+            )
+            return desk_config
+
+        _LOGGER.warning(
+            "No known desk service found on connected client for %s; services: %s",
+            self.desk_address,
+            [service.uuid for service in service_list],
+        )
+        return None
+
+    async def _clear_cache_and_discard(self, client) -> None:
+        """Clear the selected backend's cache before discarding its client."""
+        cleared = False
+        try:
+            clear_client_cache = getattr(client, "clear_cache", None)
+            if callable(clear_client_cache):
+                try:
+                    # ESPHome clears its on-device cache through this API and
+                    # requires the BLE connection to still be active.
+                    cleared = await clear_client_cache()
+                except Exception:
+                    _LOGGER.debug(
+                        "Could not clear the client's service cache for %s",
+                        self.desk_address,
+                        exc_info=True,
+                    )
+            if not cleared:
+                try:
+                    # Retain recovery for local BlueZ clients without the
+                    # backend extension. This does not address ESP32 caches.
+                    cleared = await clear_cache(self.desk_address)
+                except Exception:
+                    _LOGGER.debug(
+                        "Could not clear BlueZ cache for %s (best-effort)",
+                        self.desk_address,
+                        exc_info=True,
+                    )
+            _LOGGER.warning(
+                "Service cache clear for %s (cleared=%s)",
+                self.desk_address,
+                cleared,
+            )
+        finally:
+            if client is not None:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    _LOGGER.debug("Could not disconnect discarded client (best-effort)", exc_info=True)
+        await asyncio.sleep(1.0)  # allow the selected scanner to rediscover it
+
+    async def _stop_current_controller(self) -> None:
+        """Tear down the current controller (stop + disconnect) before replacement."""
+        old = self._desk
+        self._desk = None
+        if old is None:
+            return
+
+        await self._stop_controller(old)
+
+    async def _stop_controller(self, old: DeskController) -> None:
+        """Release a controller, including one that was never published."""
+        client = old.client
+        try:
+            await old.stop()
+        except Exception:
+            _LOGGER.debug(
+                "Ignoring error while stopping previous controller",
+                exc_info=True,
+            )
+        finally:
+            if client is not None and client.is_connected:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    _LOGGER.debug(
+                        "Ignoring error while disconnecting previous client",
+                        exc_info=True,
+                    )
+
+    async def _establish_and_start(self, refresh_state: bool = True) -> DeskController:
+        """Serialize connection cycles and reuse a controller another caller started."""
+        async with self._desk_lock:
+            if self._intentional_disconnect:
+                raise RuntimeError("Desk coordinator is disconnecting")
+            if self.is_connected:
+                return self._desk
+            return await self._establish_and_start_locked(refresh_state)
+
+    async def _establish_and_start_locked(self, refresh_state: bool) -> DeskController:
+        """Run one (re)connect cycle: connect once, validate, start, refresh.
+
+        Opens exactly one BLE connection per attempt, validates the connected
+        client's GATT services before building a controller, clears the selected
+        backend's cache and retries once on an empty/partial service set or a
+        notification-subscription timeout, tears down the
+        previous controller before replacement, and calls start() exactly once
+        on the freshly built controller. A client that is connected but never
+        adopted (because start() failed or the cycle was cancelled) is released
+        so no Bluetooth connection slot is leaked.
+        """
+        await self._stop_current_controller()
+        for attempt in (1, 2):
+            if self._intentional_disconnect:
+                raise RuntimeError("Desk coordinator is disconnecting")
+            device = self._resolve_ble_device()
+            _LOGGER.debug("Starting (re)connect cycle for %s (attempt %d/2)", self.desk_info, attempt)
+            client = await establish_connection(
+                BleakClientWithServiceCache,
+                device,
+                device.name or self.desk_name or "Unknown",
+                disconnected_callback=self._on_ble_disconnected,
+                max_attempts=3,
+            )
+            controller = None
+            try:
+                if self._intentional_disconnect:
+                    raise RuntimeError("Desk coordinator is disconnecting")
+                desk_config = self._validate_client_services(client)
+                if desk_config is None:
+                    _LOGGER.warning("Incomplete GATT services (attempt %d/2); clearing cache and retrying", attempt)
+                    await self._clear_cache_and_discard(client)
+                    continue  # a second invalid client falls through to the error below
+                controller = ValidatedDesk(
+                    address=self.desk_address,
+                    name=self.desk_name,
+                    desk_config=desk_config,
+                ).create_controller(client, fallback_unit=self._fallback_unit)
+                controller.on(DeskEventType.HEIGHT, self._async_height_notify_callback)
+                controller.on(
+                    DeskEventType.HEIGHT_LIMITS_CONFIGURATION,
+                    self._async_height_limits_configuration_callback,
+                )
+                controller.on(
+                    DeskEventType.HEIGHT_LIMIT_MAX,
+                    self._async_height_limit_max_callback,
+                )
+                controller.on(
+                    DeskEventType.HEIGHT_LIMIT_MIN,
+                    self._async_height_limit_min_callback,
+                )
+                try:
+                    await controller.start()  # once per fresh controller
+                except TimeoutError:
+                    if attempt == 2:
+                        raise
+                    _LOGGER.warning(
+                        "Desk notification startup timed out; clearing its service "
+                        "cache before one reconnect attempt",
+                        exc_info=True,
+                    )
+                    await self._clear_cache_and_discard(client)
+                    await self._stop_controller(controller)
+                    continue
+                if self._intentional_disconnect:
+                    raise RuntimeError("Desk coordinator is disconnecting")
+                self._desk = controller
+            except BaseException:
+                # The client was connected but never adopted (start() raised, or
+                # the cycle was cancelled mid-flight). Release it so we don't
+                # leak a BlueZ connection slot.
+                if controller is not None:
+                    await self._stop_controller(controller)
+                else:
+                    try:
+                        await client.disconnect()
+                    except Exception:
+                        _LOGGER.debug("Could not disconnect unadopted client (best-effort)", exc_info=True)
+                raise
+            self._desk_variant = desk_config.desk_variant
+            _LOGGER.debug("Started notifications for %s", self.desk_info)
+            if refresh_state:
+                await self._refresh_state(controller)
+            if self._intentional_disconnect:
+                raise RuntimeError("Desk coordinator is disconnecting")
+            return controller
+        raise UpliftDeskServicesError(
+            f"Connected client for {self.desk_address} still lacks required GATT characteristics after cache clear and one retry"
+        )
+
+    async def _refresh_state(self, controller: DeskController) -> None:
+        """Best-effort refresh of units + height after a (re)connect; never fails the connect."""
+        # Stay on this controller: public getters could reconnect and re-enter
+        # the lifecycle lock if the link drops during the refresh.
+        try:
+            await self._read_desk_units(controller)
+        except Exception:
+            _LOGGER.warning("Failed to refresh desk units after (re)connect", exc_info=True)
+        try:
+            await self._read_desk_height(controller)
+        except Exception:
+            _LOGGER.warning("Failed to refresh desk height after (re)connect", exc_info=True)
+        self.async_set_updated_data(self._desk)
+
+    async def _get_or_establish_controller(self) -> DeskController:
+        """Return the live controller, running the (re)connect cycle if needed."""
+        if self._intentional_disconnect:
+            raise RuntimeError("Desk coordinator is disconnecting")
+        if self._desk is not None and self.is_connected:
+            return self._desk
+        return await self._establish_and_start()
+
+    def _on_ble_disconnected(self, client) -> None:
+        """Sync callback invoked by bleak when the link drops unexpectedly."""
+        if self._intentional_disconnect:
+            return
+        if self._desk is None or self._desk.client is not client:
+            return
+        _LOGGER.warning("Desk connection lost; will attempt to reconnect")
+        self.hass.async_create_task(self._async_handle_unexpected_disconnect(client))
+
+    async def _async_handle_unexpected_disconnect(self, client) -> None:
+        """Handle an unexpected link drop: tear down, then reconnect with backoff."""
+        async with self._desk_lock:
+            if self._intentional_disconnect:
+                return
+            if self._desk is None or self._desk.client is not client:
+                return
+            await self._stop_current_controller()
+            # The link is gone, so the commanded target is no longer being
+            # tracked; clear it so the same push below delivers both the
+            # unavailability and the setpoint clear.
+            self._height_setpoint_mm = None
+            _LOGGER.debug(
+                "Cleared height setpoint for desk %s on unexpected disconnect",
+                self.desk_info,
+            )
+            # The cached position is invalid once the link is gone: the first
+            # height notification after a (re)connect must not reconcile the
+            # setpoint against a stale pre-disconnect height.
+            self.height_mm = None
+            # With self._desk now None, push unavailability to the entities.
+            self.async_update_listeners()
+            self._start_reconnect_loop()
+
+    def _start_reconnect_loop(self) -> None:
+        """Start the tracked reconnect task if one is not already running."""
+        if self._intentional_disconnect:
+            return
+        if self._reconnect_task is not None and not self._reconnect_task.done():
+            return  # a reconnect is already in progress
+        self._reconnect_task = self.hass.async_create_task(self._async_reconnect_loop())
+
+    async def _async_reconnect_loop(self) -> None:
+        """Retry the (re)connect cycle with capped backoff until success or unload."""
+        try:
+            backoff_index = 0
+            while not self._intentional_disconnect:
+                delay = _RECONNECT_BACKOFF_SECONDS[
+                    min(backoff_index, len(_RECONNECT_BACKOFF_SECONDS) - 1)
+                ]
+                await asyncio.sleep(delay)
+                if self._intentional_disconnect:
+                    return
+                try:
+                    await self._establish_and_start()
+                    _LOGGER.info("Reconnected to desk %s", self.desk_info)
+                    return
+                except Exception:
+                    _LOGGER.warning(
+                        "Reconnect attempt for %s failed; will retry with backoff",
+                        self.desk_info,
+                        exc_info=True,
+                    )
+                    backoff_index += 1
+        finally:
+            self._reconnect_task = None
 
     @property
     def desk_name(self):
-        return self._desk.name
+        return self._discovered_desk.name
+
+    @property
+    def desk_address(self):
+        return self._discovered_desk.address
 
     @property
     def desk_info(self):
-        return str(self._desk)
+        return f"{self.desk_name} - {self.desk_address}"
 
     @property
     def is_connected(self):
-        return self._desk.bleak_client is not None and\
-            self._desk.bleak_client.is_connected
+        return self._desk is not None and self._desk.client is not None and self._desk.client.is_connected
+
+    @property
+    def supports_extended_presets(self):
+        return self._desk_variant in _EXTENDED_PRESET_VARIANTS
+
+    @property
+    def height_setpoint_mm(self) -> int | None:
+        """The height (mm) the desk was last commanded to move to, or None."""
+        return self._height_setpoint_mm
 
     async def async_connect(self):
-        if not self.is_connected:
-            self._desk.bleak_client = await establish_connection(
-                BleakClientWithServiceCache,
-                self._ble_device,
-                self._ble_device.name or self.desk_name or "Unknown",
-                max_attempts=3
-            )
+        # Initial setup reads units+height itself (with strict error handling in
+        # async_setup_entry), so skip the redundant best-effort refresh here.
+        await self._establish_and_start(refresh_state=False)
 
-    async def async_disconnect(self):
+    async def async_disconnect(self) -> None:
+        """Tear down cleanly on unload: cancel reconnects, stop, disconnect, drop the controller."""
+        self._intentional_disconnect = True
+        self._motion_generation += 1
+        # Defensive: entity platforms are already unloaded before
+        # async_unload_entry calls this, so no listener push is needed.
+        self._height_setpoint_mm = None
+        _LOGGER.debug(
+            "Cleared height setpoint for desk %s on disconnect",
+            self.desk_info,
+        )
+        # The cached position is invalid once the link is gone.
+        self.height_mm = None
+        reconnect_task = self._reconnect_task
+        self._reconnect_task = None
         try:
-            await self._desk.bleak_client.disconnect()
+            if reconnect_task is not None and not reconnect_task.done():
+                reconnect_task.cancel()
+                await asyncio.gather(reconnect_task, return_exceptions=True)
         finally:
-            self._desk.bleak_client = None
-
-    async def async_start_notify(self):
-        await self._desk.start_notify()
-
-    async def async_stop_notify(self):
-        await self._desk.stop_notify()
+            self._intentional_disconnect = True
+            self._reconnect_task = None
+            async with self._desk_lock:
+                await self._stop_current_controller()
 
     async def async_read_desk_height(self):
-        return await self._desk.read_height()
+        controller = await self._get_or_establish_controller()
+        return await self._read_desk_height(controller)
 
-    async def async_sit(self):
-        await self._desk.move_to_sitting()
+    async def _read_desk_height(self, controller: DeskController):
+        if self._query_on_connect:
+            await controller.request_height_limits()
+        self.height_mm = controller.height_mm
+        return self.height_mm
 
-    async def async_stand(self):
-        await self._desk.move_to_standing()
+    async def async_read_desk_units(self):
+        controller = await self._get_or_establish_controller()
+        return await self._read_desk_units(controller)
 
-    async def _async_height_notify_callback(self, desk: Desk):
-        self.async_set_updated_data(desk)
+    async def _read_desk_units(self, controller: DeskController):
+        if self._query_on_connect:
+            await controller.request_units()
+        retrieved_unit = controller.unit
+        if retrieved_unit is None:
+            retrieved_unit = self._fallback_unit
+            if retrieved_unit is None:
+                _LOGGER.warning("Desk did not report units and no fallback is configured")
+            else:
+                _LOGGER.warning("Desk did not report units; using configured %s fallback", retrieved_unit.value)
+        self.keypad_display_units = retrieved_unit
+        return self.keypad_display_units
+
+    async def async_preset_1(self):
+        await self._async_recall_preset(1)
+
+    async def async_preset_2(self):
+        await self._async_recall_preset(2)
+
+    async def async_preset_3(self):
+        await self._async_recall_preset(3)
+
+    async def async_preset_4(self):
+        await self._async_recall_preset(4)
+
+    async def _async_recall_preset(self, slot: int) -> None:
+        """Discard a pending recall if Stop or unload supersedes it."""
+        generation = self._motion_generation
+        controller = await self._get_or_establish_controller()
+        await self._async_write_motion(
+            controller, f"move_to_height_preset_{slot}", generation
+        )
+
+    async def _async_write_motion(
+        self, controller: DeskController, name: str, generation: int, *args
+    ) -> bool:
+        """Write motion only if it has not been superseded by Stop or unload."""
+        # Preserve 0.7.0's wake sequence outside the final-write lock, so a
+        # slow wake or reconnect cannot hold Stop behind a later motion write.
+        if controller.requires_wake:
+            for _ in range(3):
+                if generation != self._motion_generation or self._intentional_disconnect:
+                    return False
+                await controller.wake()
+                await asyncio.sleep(0.1)
+        async with self._motion_write_lock:
+            if generation != self._motion_generation or self._intentional_disconnect:
+                return False
+            await self._async_command_only(controller, name, *args)
+            return True
+
+    @staticmethod
+    async def _async_command_only(controller: DeskController, name: str, *args) -> None:
+        """Keep the library's packet definition while omitting wake and waits."""
+        definition = getattr(DeskController, name).__wrapped__
+        await command_writer(skip_wake=True)(definition)(controller, *args)
+
+    async def async_stop_movement(self) -> None:
+        """Cancel pending motion and send Stop only on the existing connection."""
+        self._motion_generation += 1
+        self._height_setpoint_mm = None
+        self.async_update_listeners()
+        controller = self._desk if self.is_connected else None
+        async with self._motion_write_lock:
+            if (
+                self._intentional_disconnect
+                or controller is None
+                or controller is not self._desk
+                or not self.is_connected
+            ):
+                raise HomeAssistantError(
+                    "Desk connection changed or is unavailable; pending motion was cancelled, "
+                    "but no Stop packet was sent. Use the desk keypad."
+                )
+            try:
+                await self._async_command_only(controller, "stop_movement")
+            except (BleakError, TimeoutError) as err:
+                raise HomeAssistantError(
+                    "Could not send Stop to the desk. Use the desk keypad."
+                ) from err
+
+    async def async_wake(self):
+        await (await self._get_or_establish_controller()).wake()
+
+    async def async_move_to_height(self, height_mm: int | float) -> None:
+        """Command the desk to move to a specific height (mm).
+
+        At most one move command may be in flight (coalescing, below);
+        a second concurrent set raises UpliftDeskMoveInFlightError. The
+        in-flight window covers the command write plus any (re)connect
+        cycle needed to reach a disconnected desk, so it can last well
+        longer than the BLE write itself.
+        Raises UpliftDeskLockedError if the desk last reported LOCKED.
+
+        The commanded target is stored as the height setpoint *before* the
+        write (optimistic), so the Height Setpoint entity shows the target
+        immediately - even while a (re)connect cycle is still in progress -
+        and height notifications reconcile it away as the desk arrives or is
+        interrupted. Stop or unload cancels a pending write and clears its
+        target. Otherwise, a failed command restores the previous setpoint so
+        a failed set never leaves a stale target.
+        """
+        # Reject (not queue) a second concurrent set: the check-and-set below
+        # has no await between them, so it is race-free on the HA event loop.
+        if self._move_in_flight:
+            raise UpliftDeskMoveInFlightError(
+                f"A move command for desk {self.desk_info} is in flight, or the desk is "
+                "reconnecting; try again shortly"
+            )
+        self._move_in_flight = True
+        generation = self._motion_generation
+        target_mm = int(round(height_mm))
+        previous_setpoint_mm = self._height_setpoint_mm
+        # Optimistic: show the commanded target immediately, even while a
+        # (re)connect cycle is still in progress.
+        self._height_setpoint_mm = target_mm
+        self.async_set_updated_data(self._desk)
+        try:
+            controller = await self._get_or_establish_controller()
+            if controller.lock_status is DeskLockStatus.LOCKED:
+                raise UpliftDeskLockedError(
+                    f"Desk {self.desk_info} is locked; unlock it before moving"
+                )
+            # A lock_status of None means the desk has not reported one since
+            # connect; proceed — the firmware rejects a move if truly locked.
+            if not await self._async_write_motion(
+                controller, "move_to_specified_height", generation, target_mm
+            ):
+                return
+            _LOGGER.debug(
+                "Commanded desk %s to move to %d mm", self.desk_info, target_mm
+            )
+            if (
+                self.height_mm is not None
+                and abs(self.height_mm - target_mm)
+                <= HEIGHT_SETPOINT_ARRIVAL_TOLERANCE_MM
+            ):
+                # Desk already at (within tolerance of) the commanded height:
+                # nothing left to track.
+                self._height_setpoint_mm = None
+                self.async_update_listeners()
+        except Exception:
+            # Command failed (write error, locked, reconnect failure): restore
+            # the previous setpoint so a failed set never leaves a stale target.
+            # A concurrent Stop or unload has already cancelled this target;
+            # do not resurrect an older one when the pending command fails.
+            if generation == self._motion_generation and not self._intentional_disconnect:
+                self._height_setpoint_mm = previous_setpoint_mm
+                self.async_update_listeners()
+            raise
+        finally:
+            self._move_in_flight = False
+
+    def _async_height_notify_callback(self, height_mm: float) -> None:
+        previous_height_mm = self.height_mm
+        self.height_mm = height_mm
+        self._reconcile_height_setpoint(previous_height_mm, height_mm)
+        _LOGGER.debug("Height notify callback received height: %s mm", height_mm)
+        self.async_set_updated_data(self._desk)
+
+    def _reconcile_height_setpoint(
+        self, previous_height_mm: float | None, height_mm: float
+    ) -> None:
+        """Reconcile the active setpoint against a fresh height report.
+
+        Clears the setpoint on arrival (the reported height is within the
+        arrival tolerance of the target, or the desk crossed the target
+        between two notifications) or on interruption (the desk moved away
+        from the target by more than the jitter epsilon - keypad, preset,
+        or any other control).
+        """
+        setpoint_mm = self._height_setpoint_mm
+        if setpoint_mm is None:
+            return
+        # Arrival: reported height within tolerance of the target.
+        if abs(height_mm - setpoint_mm) <= HEIGHT_SETPOINT_ARRIVAL_TOLERANCE_MM:
+            self._height_setpoint_mm = None
+            _LOGGER.debug(
+                "Desk %s arrived at setpoint %d mm (reported %s mm)",
+                self.desk_info,
+                setpoint_mm,
+                height_mm,
+            )
+            return
+        if previous_height_mm is None:
+            return
+        # Arrival: the desk crossed the target between two notifications.
+        if (previous_height_mm - setpoint_mm) * (height_mm - setpoint_mm) < 0:
+            self._height_setpoint_mm = None
+            _LOGGER.debug(
+                "Desk %s crossed setpoint %d mm (%s -> %s mm)",
+                self.desk_info,
+                setpoint_mm,
+                previous_height_mm,
+                height_mm,
+            )
+            return
+        # Interruption: desk moved away from the target (keypad/preset/etc.).
+        delta = height_mm - previous_height_mm
+        to_target = setpoint_mm - previous_height_mm
+        if (
+            abs(delta) > HEIGHT_SETPOINT_INTERRUPTION_EPSILON_MM
+            and delta * to_target < 0
+        ):
+            self._height_setpoint_mm = None
+            _LOGGER.debug(
+                "Desk %s moved away from setpoint %d mm (%s -> %s mm)",
+                self.desk_info,
+                setpoint_mm,
+                previous_height_mm,
+                height_mm,
+            )
+
+    def _async_height_limits_configuration_callback(self, max_mm: int, min_mm: int) -> None:
+        self.height_limit_max_mm = max_mm
+        self.height_limit_min_mm = min_mm
+        _LOGGER.debug(
+            "Height limits configuration callback received max: %d mm, min: %d mm",
+            max_mm,
+            min_mm,
+        )
+        self.async_set_updated_data(self._desk)
+
+    def _async_height_limit_max_callback(self, max_mm: int) -> None:
+        self.height_limit_max_mm = max_mm
+        _LOGGER.debug("Height limit max callback received max: %d mm", max_mm)
+        self.async_set_updated_data(self._desk)
+
+    def _async_height_limit_min_callback(self, min_mm: int) -> None:
+        self.height_limit_min_mm = min_mm
+        _LOGGER.debug("Height limit min callback received min: %d mm", min_mm)
+        self.async_set_updated_data(self._desk)
+
+
+type Uplift_Desk_DeskConfigEntry = ConfigEntry[UpliftDeskBluetoothCoordinator]  # noqa: F821

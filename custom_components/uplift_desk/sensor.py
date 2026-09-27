@@ -20,8 +20,6 @@ from . import Uplift_Desk_DeskConfigEntry
 from .coordinator import UpliftDeskBluetoothCoordinator
 from .const import DOMAIN
 
-from uplift import Desk
-
 _LOGGER = logging.getLogger(__name__)
 
 async def async_setup_entry(
@@ -41,19 +39,19 @@ class DeskHeightSensor(
 
     _attr_should_poll = False
 
-    entity_description = SensorEntityDescription(
-        key="desk_height",
-        translation_key="desk_height",
-        has_entity_name=True,
-        device_class=SensorDeviceClass.DISTANCE,
-        state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement=UnitOfLength.INCHES,
-        suggested_display_precision=1)
-
     def __init__(self, coordinator: UpliftDeskBluetoothCoordinator) -> None:
         """Initialize the sensor."""
         _LOGGER.debug("Initializing height sensor for desk %s", coordinator.desk_info)
         super().__init__(coordinator)
+        self.entity_description = SensorEntityDescription(
+            key="desk_height",
+            translation_key="desk_height",
+            has_entity_name=True,
+            device_class=SensorDeviceClass.DISTANCE,
+            state_class=SensorStateClass.MEASUREMENT,
+            native_unit_of_measurement=UnitOfLength.MILLIMETERS,
+            suggested_display_precision=0
+        )
         self._attr_unique_id = f"{coordinator.desk_address}_{self.entity_description.key}"
 
     @property
@@ -69,10 +67,10 @@ class DeskHeightSensor(
     @property
     def native_value(self) -> float | None:
         """Return the current height."""
-        return self.coordinator.data.height
+        return self.coordinator.height_mm
 
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
-        self._attr_native_value = self.coordinator.data.height
+        self._attr_native_value = self.coordinator.height_mm
         self.async_write_ha_state()

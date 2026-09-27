@@ -1,13 +1,116 @@
 {
     "config": {
         "step": {
-            "confirm": {
-                "description": "[%key:common::config_flow::description::confirm_setup%]"
+            "bluetooth_confirm": {
+                "description": "Add the discovered desk `{name}`?",
+                "data": {
+                    "fallback_unit": "Fallback height unit",
+                    "query_on_connect": "Query units and limits on connect"
+                },
+                "data_description": {
+                    "fallback_unit": "Used only when the desk does not report its units. Match the desk's keypad setting. Choose no fallback to leave height unknown until units are reported. This does not change the keypad's units.",
+                    "query_on_connect": "Turn off if your desk does not support these queries. Height will update from desk notifications. Select a fallback height unit if the desk does not report its units."
+                }
+            },
+            "user": {
+                "title": "Add Uplift Desk",
+                "description": "Choose how you want to add your desk.\n\nIf your desk is nearby and discoverable via Bluetooth, select it below. Otherwise, use manual entry to provide the address and name.",
+                "data": {
+                    "device": "Discoverable desk"
+                }
+            },
+            "user_manual": {
+                "title": "Manual Desk Entry",
+                "description": "Enter the Bluetooth address and a name for your desk.",
+                "data": {
+                    "address": "Bluetooth Address",
+                    "name": "Desk Name"
+                }
+            },
+            "user_confirm": {
+                "title": "Confirm Desk Details",
+                "description": "Please confirm the details for your desk:\n\n**Name:** `{name}`\n**Address:** `{address}`",
+                "data": {
+                    "fallback_unit": "Fallback height unit",
+                    "query_on_connect": "Query units and limits on connect"
+                },
+                "data_description": {
+                    "fallback_unit": "Used only when the desk does not report its units. Match the desk's keypad setting. Choose no fallback to leave height unknown until units are reported. This does not change the keypad's units.",
+                    "query_on_connect": "Turn off if your desk does not support these queries. Height will update from desk notifications. Select a fallback height unit if the desk does not report its units."
+                }
             }
+        },
+        "error": {
+            "invalid_address": "Invalid Bluetooth address. Please enter a valid address (e.g., `AA:BB:CC:DD:EE:FF`).",
+            "connection_failed": "Failed to connect to the desk. Please ensure the desk is powered on and within range."
         },
         "abort": {
             "single_instance_allowed": "[%key:common::config_flow::abort::single_instance_allowed%]",
-            "no_devices_found": "[%key:common::config_flow::abort::no_devices_found%]"
+            "no_devices_found": "[%key:common::config_flow::abort::no_devices_found%]",
+            "already_configured": "This desk is already configured.",
+            "connection_failed": "Failed to connect to the desk. Please ensure the desk is powered on and within range.",
+            "invalid_address": "The discovered device is not a supported desk."
+        }
+    },
+    "exceptions": {
+        "no_device_found": {
+            "message": "The device at address {address} is no longer available. Please try again or check if the device is in bluetooth range."
+        },
+        "device_not_found_error": {
+            "message": "Could not find Uplift Desk with address {address}"
+        }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "title": "Desk options",
+                "data": {
+                    "fallback_unit": "Fallback height unit",
+                    "query_on_connect": "Query units and limits on connect"
+                },
+                "data_description": {
+                    "fallback_unit": "Used only when the desk does not report its units. Match the desk's keypad setting. Choose no fallback to leave height unknown until units are reported. This does not change the keypad's units.",
+                    "query_on_connect": "Turn off if your desk does not support these queries. Height will update from desk notifications. Select a fallback height unit if the desk does not report its units."
+                }
+            }
+        }
+    },
+    "selector": {
+        "fallback_unit": {
+            "options": {
+                "none": "No fallback",
+                "centimeters": "Centimeters",
+                "inches": "Inches"
+            }
+        }
+    },
+    "entity": {
+        "sensor": {
+            "desk_height": {
+                "name": "Height"
+            }
+        },
+        "button": {
+            "desk_stop": {
+                "name": "Stop"
+            },
+            "desk_preset_1": {
+                "name": "Move to Preset 1"
+            },
+            "desk_preset_2": {
+                "name": "Move to Preset 2"
+            },
+            "desk_preset_3": {
+                "name": "Move to Preset 3"
+            },
+            "desk_preset_4": {
+                "name": "Move to Preset 4"
+            }
+        },
+        "number": {
+            "desk_height_setpoint": {
+                "name": "Height Setpoint"
+            }
         }
     },
     "exceptions": {

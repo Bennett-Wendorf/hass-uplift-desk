@@ -1,6 +1,3 @@
-# hass-uplift-desk
-An integration for Home Assistant to control Uplift standing desks
-
 <!--
 *** This readme is inspired by the Best-README-Template available at https://github.com/othneildrew/Best-README-Template. Thanks to othneildrew for the inspiration!
 -->
@@ -61,15 +58,24 @@ An integration for Home Assistant to control Uplift standing desks
 
 This is an **UNOFFICIAL** Home Assistant integration for control of Uplift Desk standing desks over Bluetooth Low Energy (BLE). For this library to work, you must have the [Uplift Bluetooth Adapter](https://www.upliftdesk.com/bluetooth-adapter-for-uplift-desk/?15775=12278) installed in a compatible desk. See their website for a better understanding of desk compatibility. 
 
-This integration relies on my uplift-desk Python package, which can be found on [PyPi](https://pypi.org/project/uplift-desk/) and [GitHub](https://github.com/Bennett-Wendorf/uplift-desk-controller). Please head over there if you have issues related to that library or would like to contribute to functionality :)
+This integration relies on the uplift-ble Python package, which can be found on [PyPi](https://pypi.org/project/uplift-ble/) and [GitHub](https://github.com/librick/uplift-ble). Please head over there if you have issues related to that library or would like to contribute to functionality :)
 
 > Note: When using this project, no other device can be connected to the desk or it will be undiscoverable. This means that the Uplift Desk app needs to be either disconnected or closed for this application to work.
 
-The integration currently provides 4 entities:
+> Normally, an advanced keypad with programmable buttons is required to use this integration (to set the presets the integration exposes). However, for users without an advanced keypad, the desk can still be programmed with preset values using the cli provided by the [uplift-ble](https://github.com/librick/uplift-ble) to set the preset values. 
+
+The integration currently provides up to 7 entities:
 1. A sensor for the current height of the desk. This will update automatically as your desk is moving, though it is not instantaneous and should not be relied on for safety.
-2. A binary sensor for whether the desk is currently moving. Like height, this value is not instantaneous, so it's always a good idea to be near the desk for safety.
-3. A button to raise the desk to it's standing preset. This preset does not correspond to any of the presets on your desk's advanced keypad (if installed). It matches the standing preset defined in the app, and must be configured there before use.
-4. A button to lower the desk to it's sitting preset. This preset does not correspond to any of the presets on your desk's advanced keypad (if installed). It matches the sitting preset defined in the app, and must be configured there before use.
+2. A button to move the desk to its configured preset 1.
+3. A button to move the desk to its configured preset 2.
+4. A disabled-by-default button to move supported desks to configured preset 3.
+5. A disabled-by-default button to move supported desks to configured preset 4.
+6. A number to move the desk to a specific height (the Height Setpoint).
+7. A Stop button to stop movement and cancel pending preset or height requests.
+
+Preset 3 and 4 buttons are currently limited to the verified `0x00FF`,
+`0xFE60`, and `0xFF00` connected GATT profiles. Some V3 adapters advertise
+`0x00FF` during discovery but expose `0xFF00` after connecting.
 
 
 <!-- Getting Started -->
@@ -80,6 +86,61 @@ This is the easiest way to install HASS Uplift Desk. Click the button below to g
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Bennett-Wendorf&repository=hass-uplift-desk&category=integration)
 
+### Fallback Height Unit
+
+Most desks report their display units. If a desk does not, open the
+integration's configuration options and select a fallback of centimeters or
+inches matching the desk's keypad setting. Choose no fallback to leave height
+unknown until the desk reports its units. A unit reported by the desk always
+takes precedence over the fallback. Saving a changed option reloads the
+integration to apply it.
+
+Existing entries retain the previous centimeters behavior during upgrade. If
+the desk keypad displays inches, change the fallback option after upgrading.
+New entries start with no fallback. Changing this option does not change the
+keypad's units or move the desk.
+
+
+### Bluetooth Startup Recovery
+
+The **Query units and limits on connect** option is enabled by default. Turn it
+off for desks that do not support those queries. With it disabled, startup and
+reconnection only subscribe to notifications; height stays unknown until the
+desk reports it. Select a fallback height unit if the desk does not report its
+units. Explicit preset, height setpoint, and Stop actions remain available.
+
+If notification subscription times out, the integration attempts to clear the
+desk's service cache through the selected Bluetooth backend before disconnecting
+and retrying once. This allows ESPHome proxies to clear their own cached GATT
+services; a local BlueZ cache clear alone cannot do that. A second subscription
+timeout is reported to Home Assistant. Cancellation and unload do not trigger
+another connection attempt.
+
+### Stop Movement
+
+Each desk has an enabled-by-default **Stop** button alongside its preset
+controls. Press it in Home Assistant, or use `button.press` from an automation
+or Companion, targeting that desk's Stop entity. It cancels pending preset and
+height setpoint requests and clears the displayed height target. No height
+reading is required.
+
+```yaml
+action: button.press
+target:
+  entity_id: button.your_desk_stop
+```
+
+Use the actual Stop entity ID from your desk's device page. Development versions
+that used `uplift_desk.stop` should update their callers to `button.press`;
+the custom action is replaced by this button.
+
+Stop uses the existing Bluetooth connection and skips wake packets and
+notification waits. The button stays available during reconnects so it can
+cancel pending movement. If the desk is disconnected, the action reports that
+no Stop packet was sent and does not queue a delayed Stop for a later reconnect.
+An explicit preset or height setpoint request made after Stop can still move
+the desk. Keep the physical keypad available; Bluetooth Stop is not an
+emergency-stop circuit.
 
 <!-- CONTRIBUTING -->
 ## Contributing
@@ -94,6 +155,10 @@ Contributions are what make the open source community such an amazing place to b
 
 If you find an issue in existing code, feel free to use the above procedure to generate a change, or open an [issue](https://github.com/Bennett-Wendorf/hass-uplift-desk/issues) for me to fix it.
 
+<!-- CONTRIBUTORS -->
+## Contributors
+
+[![Contributors](https://contrib.rocks/image?repo=Bennett-Wendorf/hass-uplift-desk)](https://github.com/Bennett-Wendorf/hass-uplift-desk/graphs/contributors)
 
 <!-- LICENSE -->
 ## License
@@ -112,6 +177,7 @@ Bennett Wendorf - [Website](https://bennettwendorf.dev/) - bennett@bennettwendor
 <!-- ACKNOWLEDGEMENTS -->
 ## Acknowledgements
 * [Img Shields](https://shields.io)
+* [uplift-ble](https://github.com/librick/uplift-ble)
 
 
 <!-- MARKDOWN LINKS & IMAGES -->

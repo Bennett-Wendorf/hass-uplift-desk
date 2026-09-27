@@ -15,8 +15,6 @@ from . import Uplift_Desk_DeskConfigEntry
 from .coordinator import UpliftDeskBluetoothCoordinator
 from .const import DOMAIN
 
-from uplift import Desk
-
 _LOGGER = logging.getLogger(__name__)
 
 async def async_setup_entry(
@@ -26,59 +24,177 @@ async def async_setup_entry(
 ) -> None:
     """Set up the button platform."""
     _LOGGER.debug("Setting up button platform for desk %s", config_entry.runtime_data.desk_info)
-    async_add_entities([
-        UpliftDeskSitButton(config_entry.runtime_data),
-        UpliftDeskStandButton(config_entry.runtime_data),
-    ])
+    buttons: list[ButtonEntity] = [
+        UpliftDeskPreset1Button(config_entry.runtime_data),
+        UpliftDeskPreset2Button(config_entry.runtime_data),
+        UpliftDeskStopButton(config_entry.runtime_data),
+    ]
+    if config_entry.runtime_data.supports_extended_presets:
+        buttons.extend([
+            UpliftDeskPreset3Button(config_entry.runtime_data),
+            UpliftDeskPreset4Button(config_entry.runtime_data),
+        ])
+    async_add_entities(buttons)
 
-class UpliftDeskSitButton(
+class UpliftDeskStopButton(
     CoordinatorEntity[UpliftDeskBluetoothCoordinator],
     ButtonEntity):
-    """Representation of a sit button."""
+    """Stop one desk and cancel its pending motion, including during reconnect."""
 
     entity_description = ButtonEntityDescription(
-        key="desk_sit",
-        translation_key="desk_sit",
+        key="desk_stop",
+        translation_key="desk_stop",
+        has_entity_name=True,
+    )
+
+    def __init__(self, coordinator: UpliftDeskBluetoothCoordinator) -> None:
+        """Initialize the Stop button."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.desk_address}_{self.entity_description.key}"
+
+    @property
+    def device_info(self):
+        """Link Stop to the same device as the desk's other controls."""
+        return {"identifiers": {(DOMAIN, self.coordinator.desk_address)}, "name": self.coordinator.desk_name}
+
+    @property
+    def available(self) -> bool:
+        """Allow cancelling pending motion even while Bluetooth is disconnected."""
+        # HA removes the entity when its config entry unloads. While loaded,
+        # cancellation must remain callable; the coordinator reports when it
+        # cannot send a physical Stop without queuing one for reconnect.
+        return True
+
+    async def async_press(self) -> None:
+        """Cancel pending motion and send Stop on the existing connection."""
+        await self.coordinator.async_stop_movement()
+
+class UpliftDeskPreset1Button(
+    CoordinatorEntity[UpliftDeskBluetoothCoordinator],
+    ButtonEntity):
+    """Representation of a preset 1 button."""
+
+    entity_description = ButtonEntityDescription(
+        key="desk_preset_1",
+        translation_key="desk_preset_1",
         has_entity_name=True,
     )
 
     def __init__(self, coordinator: UpliftDeskBluetoothCoordinator) -> None:
         """Initialize the button."""
-        _LOGGER.debug("Initializing sit button for desk %s", coordinator.desk_info)
+        _LOGGER.debug("Initializing preset 1 button for desk %s", coordinator.desk_info)
         super().__init__(coordinator)
         self._attr_unique_id = f"{coordinator.desk_address}_{self.entity_description.key}"
+        _LOGGER.debug("Set preset 1 button UID to %s", self._attr_unique_id)
 
     @property
     def device_info(self):
         """Return information to link this entity with the correct device."""
         return {"identifiers": {(DOMAIN, self.coordinator.desk_address)}, "name": self.coordinator.desk_name}
 
+    @property
+    def available(self) -> bool:
+        """Return True if the desk is available."""
+        return self.coordinator.is_connected
+
     async def async_press(self) -> None:
         """Handle the button press."""
-        await self.coordinator.async_sit()
+        await self.coordinator.async_preset_1()
 
-class UpliftDeskStandButton(
+class UpliftDeskPreset2Button(
     CoordinatorEntity[UpliftDeskBluetoothCoordinator],
     ButtonEntity):
-    """Representation of a stand button."""
+    """Representation of a preset 2 button."""
 
     entity_description = ButtonEntityDescription(
-        key="desk_stand",
-        translation_key="desk_stand",
+        key="desk_preset_2",
+        translation_key="desk_preset_2",
         has_entity_name=True,
     )
 
     def __init__(self, coordinator: UpliftDeskBluetoothCoordinator) -> None:
         """Initialize the button."""
-        _LOGGER.debug("Initializing stand button for desk %s", coordinator.desk_info)
+        _LOGGER.debug("Initializing preset 2 button for desk %s", coordinator.desk_info)
         super().__init__(coordinator)
         self._attr_unique_id = f"{coordinator.desk_address}_{self.entity_description.key}"
+        _LOGGER.debug("Set preset 2 button UID to %s", self._attr_unique_id)
 
     @property
     def device_info(self):
         """Return information to link this entity with the correct device."""
         return {"identifiers": {(DOMAIN, self.coordinator.desk_address)}, "name": self.coordinator.desk_name}
 
+    @property
+    def available(self) -> bool:
+        """Return True if the desk is available."""
+        return self.coordinator.is_connected
+
     async def async_press(self) -> None:
         """Handle the button press."""
-        await self.coordinator.async_stand()
+        await self.coordinator.async_preset_2()
+
+class UpliftDeskPreset3Button(
+    CoordinatorEntity[UpliftDeskBluetoothCoordinator],
+    ButtonEntity):
+    """Representation of a preset 3 button."""
+
+    entity_description = ButtonEntityDescription(
+        key="desk_preset_3",
+        translation_key="desk_preset_3",
+        has_entity_name=True,
+        entity_registry_enabled_default=False,
+    )
+
+    def __init__(self, coordinator: UpliftDeskBluetoothCoordinator) -> None:
+        """Initialize the button."""
+        _LOGGER.debug("Initializing preset 3 button for desk %s", coordinator.desk_info)
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.desk_address}_{self.entity_description.key}"
+        _LOGGER.debug("Set preset 3 button UID to %s", self._attr_unique_id)
+
+    @property
+    def device_info(self):
+        """Return information to link this entity with the correct device."""
+        return {"identifiers": {(DOMAIN, self.coordinator.desk_address)}, "name": self.coordinator.desk_name}
+
+    @property
+    def available(self) -> bool:
+        """Return True if the desk is available."""
+        return self.coordinator.is_connected
+
+    async def async_press(self) -> None:
+        """Handle the button press."""
+        await self.coordinator.async_preset_3()
+
+class UpliftDeskPreset4Button(
+    CoordinatorEntity[UpliftDeskBluetoothCoordinator],
+    ButtonEntity):
+    """Representation of a preset 4 button."""
+
+    entity_description = ButtonEntityDescription(
+        key="desk_preset_4",
+        translation_key="desk_preset_4",
+        has_entity_name=True,
+        entity_registry_enabled_default=False,
+    )
+
+    def __init__(self, coordinator: UpliftDeskBluetoothCoordinator) -> None:
+        """Initialize the button."""
+        _LOGGER.debug("Initializing preset 4 button for desk %s", coordinator.desk_info)
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.desk_address}_{self.entity_description.key}"
+        _LOGGER.debug("Set preset 4 button UID to %s", self._attr_unique_id)
+
+    @property
+    def device_info(self):
+        """Return information to link this entity with the correct device."""
+        return {"identifiers": {(DOMAIN, self.coordinator.desk_address)}, "name": self.coordinator.desk_name}
+
+    @property
+    def available(self) -> bool:
+        """Return True if the desk is available."""
+        return self.coordinator.is_connected
+
+    async def async_press(self) -> None:
+        """Handle the button press."""
+        await self.coordinator.async_preset_4()
