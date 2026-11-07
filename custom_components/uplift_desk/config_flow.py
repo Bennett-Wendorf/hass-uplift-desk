@@ -258,7 +258,7 @@ class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
                                 },
                             }),
                         }),
-                        errors={"base": "invalid_address"},
+                        errors={"base": "desk_not_validated"},
                     )
 
                 # Device validated successfully - proceed to confirmation
@@ -349,7 +349,7 @@ class UpliftDeskConfigFlow(ConfigFlow, domain=DOMAIN):
                         vol.Required("address"): str,
                         vol.Optional("name"): str,
                     }),
-                    errors={"base": "invalid_address"},
+                    errors={"base": "desk_not_validated"},
                 )
 
             # Validation succeeded - capture the real name from the validated device
