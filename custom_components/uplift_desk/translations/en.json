@@ -95,6 +95,12 @@
             },
             "desk_preset_2_height": {
                 "name": "Preset 2 Height"
+            },
+            "desk_preset_3_height": {
+                "name": "Preset 3 Height"
+            },
+            "desk_preset_4_height": {
+                "name": "Preset 4 Height"
             }
         },
         "button": {
@@ -106,6 +112,12 @@
             },
             "desk_save_preset_2": {
                 "name": "Save Height as Preset 2"
+            },
+            "desk_save_preset_3": {
+                "name": "Save Height as Preset 3"
+            },
+            "desk_save_preset_4": {
+                "name": "Save Height as Preset 4"
             },
             "desk_preset_1": {
                 "name": "Move to Preset 1"

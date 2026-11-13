@@ -10,8 +10,10 @@ CONF_QUERY_ON_CONNECT = "query_on_connect"
 DEFAULT_HEIGHT_LIMIT_MIN_MM: int = 500
 DEFAULT_HEIGHT_LIMIT_MAX_MM: int = 1300
 
-# uplift-ble only defines "save current height" commands for presets 1 and 2.
-SAVEABLE_PRESET_SLOTS: tuple[int, ...] = (1, 2)
+# Slots 3 and 4 are only offered on desks that support extended presets, and
+# their entities start disabled, like the Move to Preset 3/4 buttons.
+BASE_PRESET_SLOTS: tuple[int, ...] = (1, 2)
+EXTENDED_PRESET_SLOTS: tuple[int, ...] = (3, 4)
 # Saving stores wherever the desk is right now, so refuse to save until the
 # desk has reported no height change (and received no recall) for this long.
 PRESET_SAVE_SETTLE_SECONDS: float = 2.0

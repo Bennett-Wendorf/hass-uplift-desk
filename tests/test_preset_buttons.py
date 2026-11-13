@@ -58,16 +58,20 @@ async def test_presets_follow_connected_gatt_profile(
     try:
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
+        entities = er.async_entries_for_config_entry(registry, entry.entry_id)
         buttons = {
-            entity.unique_id: entity
-            for entity in er.async_entries_for_config_entry(registry, entry.entry_id)
-            if entity.domain == "button"
+            entity.unique_id: entity for entity in entities if entity.domain == "button"
         }
         assert set(buttons) == {
             f"{DESK_ADDRESS}_desk_preset_{slot}" for slot in expected_slots
-        } | {f"{DESK_ADDRESS}_desk_save_preset_{slot}" for slot in (1, 2)} | {
+        } | {f"{DESK_ADDRESS}_desk_save_preset_{slot}" for slot in expected_slots} | {
             f"{DESK_ADDRESS}_desk_stop"
         }
+        assert {
+            entity.unique_id for entity in entities if entity.domain == "sensor"
+        } == {
+            f"{DESK_ADDRESS}_desk_preset_{slot}_height" for slot in expected_slots
+        } | {f"{DESK_ADDRESS}_desk_height"}
         for slot in expected_slots:
             entity = buttons[f"{DESK_ADDRESS}_desk_preset_{slot}"]
             assert entity.disabled_by is (

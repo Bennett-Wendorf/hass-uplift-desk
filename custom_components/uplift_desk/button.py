@@ -14,7 +14,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import Uplift_Desk_DeskConfigEntry
 from .coordinator import UpliftDeskBluetoothCoordinator
-from .const import DOMAIN, SAVEABLE_PRESET_SLOTS
+from .const import BASE_PRESET_SLOTS, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ async def async_setup_entry(
     ]
     buttons.extend(
         UpliftDeskSavePresetButton(config_entry.runtime_data, slot)
-        for slot in SAVEABLE_PRESET_SLOTS
+        for slot in config_entry.runtime_data.preset_slots
     )
     if config_entry.runtime_data.supports_extended_presets:
         buttons.extend([
@@ -88,6 +88,7 @@ class UpliftDeskSavePresetButton(
             translation_key=f"desk_save_preset_{slot}",
             has_entity_name=True,
             entity_category=EntityCategory.CONFIG,
+            entity_registry_enabled_default=slot in BASE_PRESET_SLOTS,
         )
         self._attr_unique_id = f"{coordinator.desk_address}_{self.entity_description.key}"
 

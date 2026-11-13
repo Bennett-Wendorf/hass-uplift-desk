@@ -30,17 +30,18 @@ from uplift_ble.models import DiscoveredDesk as ValidatedDesk
 
 from .models import DiscoveredDesk
 from .const import (
+    BASE_PRESET_SLOTS,
     CONF_FALLBACK_UNIT,
     CONF_QUERY_ON_CONNECT,
     DEFAULT_HEIGHT_LIMIT_MAX_MM,
     DEFAULT_HEIGHT_LIMIT_MIN_MM,
+    EXTENDED_PRESET_SLOTS,
     FALLBACK_UNIT_NONE,
     HEIGHT_SETPOINT_ARRIVAL_TOLERANCE_MM,
     HEIGHT_SETPOINT_INTERRUPTION_EPSILON_MM,
     PRESET_HEIGHT_LIMIT_TOLERANCE_MM,
     PRESET_REPORT_DELAY_SECONDS,
     PRESET_SAVE_SETTLE_SECONDS,
-    SAVEABLE_PRESET_SLOTS,
 )
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -353,7 +354,9 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
                     DeskEventType.HEIGHT_LIMIT_MIN,
                     self._async_height_limit_min_callback,
                 )
-                for slot in SAVEABLE_PRESET_SLOTS:
+                # All four slots: this connection's variant is recorded only
+                # after start(), and a report for an unoffered slot is harmless.
+                for slot in BASE_PRESET_SLOTS + EXTENDED_PRESET_SLOTS:
                     controller.on(
                         DeskEventType[f"HEIGHT_PRESET_{slot}"],
                         functools.partial(self._async_height_preset_callback, controller, slot),
@@ -508,6 +511,13 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         return self._desk_variant in _EXTENDED_PRESET_VARIANTS
 
     @property
+    def preset_slots(self) -> tuple[int, ...]:
+        """The preset slots this desk can save and report."""
+        if self.supports_extended_presets:
+            return BASE_PRESET_SLOTS + EXTENDED_PRESET_SLOTS
+        return BASE_PRESET_SLOTS
+
+    @property
     def height_setpoint_mm(self) -> int | None:
         """The height (mm) the desk was last commanded to move to, or None."""
         return self._height_setpoint_mm
@@ -654,7 +664,7 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         refused while the desk may still be moving. It shares the motion write
         path so Stop or unload cancels a save that is still waking the desk.
         """
-        if slot not in SAVEABLE_PRESET_SLOTS:
+        if slot not in self.preset_slots:
             raise ValueError(f"Preset {slot} cannot be saved")
         self._raise_unless_desk_settled(slot)
         generation = self._motion_generation

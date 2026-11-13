@@ -18,7 +18,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import Uplift_Desk_DeskConfigEntry
 from .coordinator import UpliftDeskBluetoothCoordinator
-from .const import DOMAIN, SAVEABLE_PRESET_SLOTS
+from .const import BASE_PRESET_SLOTS, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ async def async_setup_entry(
     sensors: list[SensorEntity] = [DeskHeightSensor(config_entry.runtime_data)]
     sensors.extend(
         DeskPresetHeightSensor(config_entry.runtime_data, slot)
-        for slot in SAVEABLE_PRESET_SLOTS
+        for slot in config_entry.runtime_data.preset_slots
     )
     async_add_entities(sensors)
 
@@ -99,6 +99,7 @@ class DeskPresetHeightSensor(
             native_unit_of_measurement=UnitOfLength.MILLIMETERS,
             suggested_display_precision=0,
             entity_category=EntityCategory.DIAGNOSTIC,
+            entity_registry_enabled_default=slot in BASE_PRESET_SLOTS,
         )
         self._attr_unique_id = f"{coordinator.desk_address}_{self.entity_description.key}"
 

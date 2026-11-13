@@ -9,6 +9,12 @@
             },
             "desk_preset_2_height":{
                 "default": "mdi:numeric-2-box-outline"
+            },
+            "desk_preset_3_height":{
+                "default": "mdi:numeric-3-box-outline"
+            },
+            "desk_preset_4_height":{
+                "default": "mdi:numeric-4-box-outline"
             }
         },
         "button":{
@@ -19,6 +25,12 @@
                 "default": "mdi:content-save-outline"
             },
             "desk_save_preset_2":{
+                "default": "mdi:content-save-outline"
+            },
+            "desk_save_preset_3":{
+                "default": "mdi:content-save-outline"
+            },
+            "desk_save_preset_4":{
                 "default": "mdi:content-save-outline"
             },
             "desk_preset_1":{

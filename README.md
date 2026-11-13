@@ -62,9 +62,9 @@ This integration relies on the uplift-ble Python package, which can be found on 
 
 > Note: When using this project, no other device can be connected to the desk or it will be undiscoverable. This means that the Uplift Desk app needs to be either disconnected or closed for this application to work.
 
-> Presets 1 and 2 can be programmed from Home Assistant with the **Save Height as Preset** buttons (see [Saving Presets](#saving-presets)). Presets 3 and 4 still need an advanced keypad with programmable buttons.
+> Presets can be programmed from Home Assistant with the **Save Height as Preset** buttons (see [Saving Presets](#saving-presets)).
 
-The integration currently provides up to 11 entities:
+The integration currently provides up to 15 entities:
 1. A sensor for the current height of the desk. This will update automatically as your desk is moving, though it is not instantaneous and should not be relied on for safety.
 2. A button to move the desk to its configured preset 1.
 3. A button to move the desk to its configured preset 2.
@@ -74,10 +74,14 @@ The integration currently provides up to 11 entities:
 7. A Stop button to stop movement and cancel pending preset or height requests.
 8. A configuration button to save the desk's current height as preset 1.
 9. A configuration button to save the desk's current height as preset 2.
-10. A diagnostic sensor for the height stored in preset 1.
-11. A diagnostic sensor for the height stored in preset 2.
+10. A disabled-by-default configuration button to save a supported desk's current height as preset 3.
+11. A disabled-by-default configuration button to save a supported desk's current height as preset 4.
+12. A diagnostic sensor for the height stored in preset 1.
+13. A diagnostic sensor for the height stored in preset 2.
+14. A disabled-by-default diagnostic sensor for the height stored in preset 3 on supported desks.
+15. A disabled-by-default diagnostic sensor for the height stored in preset 4 on supported desks.
 
-Preset 3 and 4 buttons are currently limited to the verified `0x00FF`,
+Preset 3 and 4 buttons and sensors are currently limited to the verified `0x00FF`,
 `0xFE60`, and `0xFF00` connected GATT profiles. Some V3 adapters advertise
 `0x00FF` during discovery but expose `0xFF00` after connecting.
 
@@ -149,12 +153,17 @@ emergency-stop circuit.
 ### Saving Presets
 
 The desk can only store its *current* height in a preset; there is no command
-to store an arbitrary number. To program preset 1 or 2 from Home Assistant:
+to store an arbitrary number. To program a preset from Home Assistant:
 
 1. Move the desk to the height you want, for example with the **Height
    Setpoint** number or the keypad.
-2. Wait for the desk to stop, then press **Save Height as Preset 1** (or 2).
-   These buttons are on the device page under *Configuration*.
+2. Wait for the desk to stop, then press the **Save Height as Preset** button
+   for the slot you want. These buttons are on the device page under
+   *Configuration*.
+
+On [supported desks](#about-the-project), presets 3 and 4 have the same
+buttons and sensors. They are disabled by default, like the **Move to Preset
+3** and **4** buttons, so enable them on the device page first.
 
 Saving is refused while the desk is moving toward a Height Setpoint, within a
 couple of seconds of a preset recall, or while it is still reporting height
@@ -166,7 +175,7 @@ on the desk's Bluetooth adapter, so the keypad and the **Move to Preset**
 buttons use them too. This also fixes recall on desks programmed only through
 the Uplift phone app, which keeps its presets on the phone.
 
-The **Preset 1 Height** and **Preset 2 Height** diagnostic sensors show what
+The **Preset Height** diagnostic sensors show what
 the desk reports for each slot. The desk reports presets as raw numbers whose
 units vary by firmware, so the integration picks the reading that fits within
 the desk's height limits, uses the desk's display unit to break a tie, and

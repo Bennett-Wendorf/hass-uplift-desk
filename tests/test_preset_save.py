@@ -38,12 +38,14 @@ def command(opcode: int) -> tuple[str, bytes, bool]:
 
 
 WAKE = command(0x00)
-SAVE_OPCODES = {1: 0x03, 2: 0x04}
+# Saves for presets 3/4 reuse the opcodes that report presets 1/2; they are not
+# the 0x27/0x28 recalls, which would move the desk.
+SAVE_OPCODES = {1: 0x03, 2: 0x04, 3: 0x25, 4: 0x26}
 REQUEST_LIMITS = command(0x07)
 
 
 def preset_packet(slot: int, raw: int) -> bytes:
-    """Opcodes 0x25/0x26: the raw height stored in preset 1/2."""
+    """Opcodes 0x25-0x28: the raw height stored in presets 1-4."""
     return make_notification_packet(0x24 + slot, raw.to_bytes(2, "big"))
 
 
@@ -78,8 +80,15 @@ def stub_bluetooth_setup(monkeypatch):
     )
 
 
-async def setup_desk(hass, fake_ble, options=None, extra_clients=0):
+async def setup_desk(hass, fake_ble, options=None, extra_clients=0, enabled=()):
     entry = make_entry(hass, options=options)
+    registry = er.async_get(hass)
+    for domain, key in enabled:
+        # An entity already in the registry keeps its enabled state, which is
+        # how a user-enabled, disabled-by-default entity looks at setup.
+        registry.async_get_or_create(
+            domain, "uplift_desk", f"{DESK_ADDRESS}_{key}", config_entry=entry
+        )
     clients = [
         fake_ble.client_with_services(build_service_collection(CONFIG))
         for _ in range(1 + extra_clients)
@@ -103,18 +112,41 @@ async def loaded_desk(hass, fake_ble):
 
 async def test_save_and_preset_entities_are_registered(hass, loaded_desk):
     registry = er.async_get(hass)
-    for slot in (1, 2):
+    for slot in (1, 2, 3, 4):
+        # Slots 3 and 4 start disabled, like their Move to Preset buttons.
+        disabled_by = er.RegistryEntryDisabler.INTEGRATION if slot > 2 else None
         button = registry.async_get(entity_id(hass, "button", f"desk_save_preset_{slot}"))
         assert button.entity_category is EntityCategory.CONFIG
-        assert button.disabled_by is None
+        assert button.disabled_by is disabled_by
         sensor = registry.async_get(entity_id(hass, "sensor", f"desk_preset_{slot}_height"))
         assert sensor.entity_category is EntityCategory.DIAGNOSTIC
-        assert sensor.disabled_by is None
+        assert sensor.disabled_by is disabled_by
+        if disabled_by is None:
+            assert preset_state(hass, slot) == STATE_UNKNOWN
+
+
+@pytest.mark.parametrize("slot", [3, 4])
+async def test_enabled_extended_preset_saves_and_reports(hass, fake_ble, slot):
+    entry, (client,) = await setup_desk(
+        hass,
+        fake_ble,
+        enabled=[
+            ("button", f"desk_save_preset_{slot}"),
+            ("sensor", f"desk_preset_{slot}_height"),
+        ],
+    )
+    try:
+        await press(hass, f"desk_save_preset_{slot}")
+        assert client.writes == [
+            WAKE, WAKE, WAKE, command(SAVE_OPCODES[slot]), WAKE, WAKE, WAKE, REQUEST_LIMITS
+        ]
         assert preset_state(hass, slot) == STATE_UNKNOWN
-    for slot in (3, 4):
-        assert registry.async_get_entity_id(
-            "button", "uplift_desk", f"{DESK_ADDRESS}_desk_save_preset_{slot}"
-        ) is None
+
+        await client.simulate_notification(preset_packet(slot, 300))
+        await hass.async_block_till_done()
+        assert float(preset_state(hass, slot)) == 762.0
+    finally:
+        await hass.config_entries.async_unload(entry.entry_id)
 
 
 @pytest.mark.parametrize("slot", [1, 2])
