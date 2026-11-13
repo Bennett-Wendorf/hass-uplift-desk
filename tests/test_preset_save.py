@@ -247,7 +247,8 @@ async def test_save_is_refused_while_a_height_move_is_pending(hass, loaded_desk)
     await entry.runtime_data.async_move_to_height(900)
     client.writes.clear()
 
-    with pytest.raises(HomeAssistantError, match="moving"):
+    # The desk never reports arriving, so the message must point at Stop.
+    with pytest.raises(HomeAssistantError, match="press Stop to cancel"):
         await press(hass, "desk_save_preset_1")
     assert client.writes == []
 

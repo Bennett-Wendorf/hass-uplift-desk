@@ -165,9 +165,10 @@ On [supported desks](#about-the-project), presets 3 and 4 have the same
 buttons and sensors. They are disabled by default, like the **Move to Preset
 3** and **4** buttons, so enable them on the device page first.
 
-Saving is refused while the desk is moving toward a Height Setpoint, within a
+Saving is refused while a Height Setpoint is pending, within a
 couple of seconds of a preset recall, or while it is still reporting height
-changes, because the desk would store wherever it happened to be. It is also
+changes, because the desk would store wherever it happened to be. If the desk
+stopped short of a Height Setpoint, press **Stop** to clear it. It is also
 refused when the desk reports its height without identifying its units; set a
 [fallback height unit](#fallback-height-unit) so movement can be tracked. Stop
 cancels a save that has not been sent yet. Presets saved this way are stored

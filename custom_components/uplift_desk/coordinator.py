@@ -713,6 +713,13 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
                 f"Desk {self.desk_info} reports its height in unknown units, so movement "
                 f"cannot be tracked; set a fallback height unit before saving preset {slot}"
             )
+        if self._height_setpoint_mm is not None:
+            # A setpoint the desk stopped short of is never cleared on its
+            # own, so waiting alone may not help.
+            raise HomeAssistantError(
+                f"Desk {self.desk_info} has a pending Height Setpoint; wait for it to arrive "
+                f"or press Stop to cancel it before saving preset {slot}"
+            )
         if self.desk_recently_moved:
             raise HomeAssistantError(
                 f"Desk {self.desk_info} is moving; wait for it to stop before saving preset {slot}"
