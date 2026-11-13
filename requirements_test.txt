@@ -7,7 +7,7 @@
 pytest-homeassistant-custom-component==0.13.316
 
 # The integration's runtime requirement (mirrors manifest.json).
-uplift-ble==0.7.0
+uplift-ble==0.8.0
 
 # Optional Home Assistant component dependencies pulled in when importing
 # homeassistant.components.bluetooth (the coordinator's device lookup).

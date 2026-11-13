@@ -3,11 +3,35 @@
         "sensor":{
             "desk_height":{
                 "default": "mdi:human-male-height-variant"
+            },
+            "desk_preset_1_height":{
+                "default": "mdi:numeric-1-box-outline"
+            },
+            "desk_preset_2_height":{
+                "default": "mdi:numeric-2-box-outline"
+            },
+            "desk_preset_3_height":{
+                "default": "mdi:numeric-3-box-outline"
+            },
+            "desk_preset_4_height":{
+                "default": "mdi:numeric-4-box-outline"
             }
         },
         "button":{
             "desk_stop":{
                 "default": "mdi:stop-circle-outline"
+            },
+            "desk_save_preset_1":{
+                "default": "mdi:content-save-outline"
+            },
+            "desk_save_preset_2":{
+                "default": "mdi:content-save-outline"
+            },
+            "desk_save_preset_3":{
+                "default": "mdi:content-save-outline"
+            },
+            "desk_save_preset_4":{
+                "default": "mdi:content-save-outline"
             },
             "desk_preset_1":{
                 "default": "mdi:numeric-1-box-outline"

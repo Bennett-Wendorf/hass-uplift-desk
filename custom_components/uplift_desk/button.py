@@ -7,13 +7,14 @@ from homeassistant.components.button import (
     ButtonEntityDescription,
 )
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import Uplift_Desk_DeskConfigEntry
 from .coordinator import UpliftDeskBluetoothCoordinator
-from .const import DOMAIN
+from .const import BASE_PRESET_SLOTS, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -29,6 +30,10 @@ async def async_setup_entry(
         UpliftDeskPreset2Button(config_entry.runtime_data),
         UpliftDeskStopButton(config_entry.runtime_data),
     ]
+    buttons.extend(
+        UpliftDeskSavePresetButton(config_entry.runtime_data, slot)
+        for slot in config_entry.runtime_data.preset_slots
+    )
     if config_entry.runtime_data.supports_extended_presets:
         buttons.extend([
             UpliftDeskPreset3Button(config_entry.runtime_data),
@@ -68,6 +73,38 @@ class UpliftDeskStopButton(
     async def async_press(self) -> None:
         """Cancel pending motion and send Stop on the existing connection."""
         await self.coordinator.async_stop_movement()
+
+class UpliftDeskSavePresetButton(
+    CoordinatorEntity[UpliftDeskBluetoothCoordinator],
+    ButtonEntity):
+    """Store the desk's current height in one of its preset slots."""
+
+    def __init__(self, coordinator: UpliftDeskBluetoothCoordinator, slot: int) -> None:
+        """Initialize the save button for one preset slot."""
+        super().__init__(coordinator)
+        self._slot = slot
+        self.entity_description = ButtonEntityDescription(
+            key=f"desk_save_preset_{slot}",
+            translation_key=f"desk_save_preset_{slot}",
+            has_entity_name=True,
+            entity_category=EntityCategory.CONFIG,
+            entity_registry_enabled_default=slot in BASE_PRESET_SLOTS,
+        )
+        self._attr_unique_id = f"{coordinator.desk_address}_{self.entity_description.key}"
+
+    @property
+    def device_info(self):
+        """Return information to link this entity with the correct device."""
+        return {"identifiers": {(DOMAIN, self.coordinator.desk_address)}, "name": self.coordinator.desk_name}
+
+    @property
+    def available(self) -> bool:
+        """Return True if the desk is available."""
+        return self.coordinator.is_connected
+
+    async def async_press(self) -> None:
+        """Save the desk's current height to this preset."""
+        await self.coordinator.async_save_preset(self._slot)
 
 class UpliftDeskPreset1Button(
     CoordinatorEntity[UpliftDeskBluetoothCoordinator],
