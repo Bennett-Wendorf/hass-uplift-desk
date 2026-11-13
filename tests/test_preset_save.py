@@ -362,6 +362,8 @@ async def test_failed_save_write_keeps_the_reported_preset(hass, loaded_desk, mo
 
     async def write(char_uuid, data, response=False):
         if data[2] == 0x03:
+            # A notification landing mid-write publishes the unconfirmed slot.
+            entry.runtime_data.async_update_listeners()
             raise BleakError("link lost")
         await record_write(char_uuid, data, response)
 
@@ -369,10 +371,35 @@ async def test_failed_save_write_keeps_the_reported_preset(hass, loaded_desk, mo
 
     with pytest.raises(BleakError):
         await press(hass, "desk_save_preset_1")
-    entry.runtime_data.async_update_listeners()
     await hass.async_block_till_done()
 
     assert float(preset_state(hass, 1)) == 762.0
+
+
+async def test_failed_overlapping_save_keeps_the_other_saves_mark(
+    hass, loaded_desk, monkeypatch
+):
+    entry, client = loaded_desk
+    await client.simulate_notification(preset_packet(1, 300))
+    await hass.async_block_till_done()
+    record_write = client.write_gatt_char
+
+    async def write(char_uuid, data, response=False):
+        if data[2] == 0x03 and command(0x03) in client.writes:
+            raise BleakError("link lost")
+        await record_write(char_uuid, data, response)
+
+    monkeypatch.setattr(client, "write_gatt_char", write)
+
+    results = await asyncio.gather(
+        press(hass, "desk_save_preset_1"),
+        press(hass, "desk_save_preset_1"),
+        return_exceptions=True,
+    )
+
+    assert [type(result) for result in results] == [type(None), BleakError]
+    # The first save still awaits its report; the failed one must not confirm it.
+    assert entry.runtime_data.height_preset_mm(1) is None
 
 
 async def test_preset_reports_update_sensors(hass, loaded_desk):
@@ -406,6 +433,11 @@ async def test_display_unit_breaks_a_preset_tie(hass, loaded_desk):
     assert preset_state(hass, 1) == STATE_UNKNOWN
 
     await client.simulate_notification(make_units_packet(0x01))
+    await hass.async_block_till_done()
+    assert float(preset_state(hass, 1)) == pytest.approx(1295.4)
+
+    # The first unit learned is pinned, so a later change does not reinterpret.
+    await client.simulate_notification(make_units_packet(0x00))
     await hass.async_block_till_done()
     assert float(preset_state(hass, 1)) == pytest.approx(1295.4)
 

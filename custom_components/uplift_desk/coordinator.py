@@ -669,13 +669,17 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         self._raise_unless_desk_settled(slot)
         generation = self._motion_generation
         controller = await self._get_or_establish_controller()
-        already_unconfirmed = slot in self._unconfirmed_preset_slots
+        marked_slot = False
 
         def before_write() -> None:
+            nonlocal marked_slot
             # Re-check under the write lock: motion may start while the desk
             # wakes. Mark the slot before sending so a report that arrives
             # while the write is in flight confirms it rather than being lost.
+            # Whether this save owns the mark is decided here too, so a failed
+            # save cannot roll back the mark of a save that overlapped it.
             self._raise_unless_desk_settled(slot)
+            marked_slot = slot not in self._unconfirmed_preset_slots
             self._unconfirmed_preset_slots.add(slot)
 
         try:
@@ -686,8 +690,10 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
                 before_write=before_write,
             )
         except BaseException:
-            if not already_unconfirmed:
+            if marked_slot:
                 self._unconfirmed_preset_slots.discard(slot)
+                # A notification during the write may have published unknown.
+                self.async_update_listeners()
             raise
         if not written:
             raise HomeAssistantError(
@@ -951,6 +957,11 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
 
     def _async_unit_callback(self, unit: DeskUnit) -> None:
         _LOGGER.debug("Unit callback received unit: %s", unit)
+        # A preset reported before any unit takes the first unit learned, so a
+        # later display-unit change does not reinterpret it.
+        for slot, report_unit in self._preset_report_units.items():
+            if report_unit is None:
+                self._preset_report_units[slot] = unit
         self.async_set_updated_data(self._desk)
 
     def _async_height_preset_callback(
