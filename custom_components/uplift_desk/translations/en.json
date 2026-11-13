@@ -42,7 +42,8 @@
         },
         "error": {
             "invalid_address": "Invalid Bluetooth address. Please enter a valid address (e.g., `AA:BB:CC:DD:EE:FF`).",
-            "connection_failed": "Failed to connect to the desk. Please ensure the desk is powered on and within range."
+            "connection_failed": "Failed to connect to the desk. Please ensure the desk is powered on and within range.",
+            "desk_not_validated": "Could not reach a supported desk at this address. Make sure the desk is powered on, within range of a Home Assistant Bluetooth adapter or proxy, and not connected to another device such as the Uplift app. Debug logs for `uplift_ble` show the exact reason."
         },
         "abort": {
             "single_instance_allowed": "[%key:common::config_flow::abort::single_instance_allowed%]",
