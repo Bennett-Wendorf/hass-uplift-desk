@@ -18,11 +18,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import Uplift_Desk_DeskConfigEntry
 from .coordinator import UpliftDeskBluetoothCoordinator
-from .const import (
-    DEFAULT_HEIGHT_LIMIT_MAX_MM,
-    DEFAULT_HEIGHT_LIMIT_MIN_MM,
-    DOMAIN,
-)
+from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -85,27 +81,8 @@ class DeskHeightSetpointNumber(
         self.async_write_ha_state()
 
     def _effective_limits(self) -> tuple[int, int]:
-        """Resolve the effective min/max (mm) from the desk's reported limits.
-
-        A reported limit wins over the fallback default; partial knowledge
-        is fine (the unreported side stays at its fallback). A misreported
-        inverted range (min >= max) falls back to the full default range.
-        """
-        min_mm = self.coordinator.height_limit_min_mm
-        if min_mm is None:
-            min_mm = DEFAULT_HEIGHT_LIMIT_MIN_MM
-        max_mm = self.coordinator.height_limit_max_mm
-        if max_mm is None:
-            max_mm = DEFAULT_HEIGHT_LIMIT_MAX_MM
-        if min_mm >= max_mm:
-            _LOGGER.debug(
-                "Desk %s reported inverted height limits (min %d >= max %d); using fallback range",
-                self.coordinator.desk_info,
-                min_mm,
-                max_mm,
-            )
-            return DEFAULT_HEIGHT_LIMIT_MIN_MM, DEFAULT_HEIGHT_LIMIT_MAX_MM
-        return min_mm, max_mm
+        """Resolve the effective min/max (mm) from the desk's reported limits."""
+        return self.coordinator.effective_height_limits_mm
 
     async def async_set_native_value(self, value: float) -> None:
         """Command the desk to move to the given height (mm)."""

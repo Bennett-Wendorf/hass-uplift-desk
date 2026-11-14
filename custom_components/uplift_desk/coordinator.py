@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
+import functools
 import logging
+import time
 
 from homeassistant.components.bluetooth import async_ble_device_from_address
 from homeassistant.config_entries import ConfigEntry
@@ -27,11 +30,18 @@ from uplift_ble.models import DiscoveredDesk as ValidatedDesk
 
 from .models import DiscoveredDesk
 from .const import (
+    BASE_PRESET_SLOTS,
     CONF_FALLBACK_UNIT,
     CONF_QUERY_ON_CONNECT,
+    DEFAULT_HEIGHT_LIMIT_MAX_MM,
+    DEFAULT_HEIGHT_LIMIT_MIN_MM,
+    EXTENDED_PRESET_SLOTS,
     FALLBACK_UNIT_NONE,
     HEIGHT_SETPOINT_ARRIVAL_TOLERANCE_MM,
     HEIGHT_SETPOINT_INTERRUPTION_EPSILON_MM,
+    PRESET_HEIGHT_LIMIT_TOLERANCE_MM,
+    PRESET_REPORT_DELAY_SECONDS,
+    PRESET_SAVE_SETTLE_SECONDS,
 )
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -70,6 +80,35 @@ def _parse_fallback_unit(value: str | None) -> DeskUnit | None:
         return None
 
 
+def decode_preset_height_mm(
+    raw: int, min_mm: int, max_mm: int, unit: DeskUnit | None = None
+) -> float | None:
+    """Decode a raw preset report into millimeters, or None when unsure.
+
+    Preset reports carry no unit. A tested inch-mode desk reports tenths of
+    its display unit (like height), but uplift-ble warns firmware varies, so
+    both readings are considered: millimeters (identical to tenths of a
+    centimeter) and tenths of an inch. A desk's height range spans well under
+    the 2.54x ratio between them, so normally only one lands within the
+    desk's limits. When both do (wide fallback limits), the desk's display
+    unit breaks the tie; without one the preset stays unknown.
+    """
+    as_mm = float(raw)
+    as_tenths_inch = raw / 10 * 25.4
+    plausible = [
+        height_mm
+        for height_mm in (as_mm, as_tenths_inch)
+        if min_mm - PRESET_HEIGHT_LIMIT_TOLERANCE_MM
+        <= height_mm
+        <= max_mm + PRESET_HEIGHT_LIMIT_TOLERANCE_MM
+    ]
+    if len(plausible) == 1:
+        return plausible[0]
+    if len(plausible) == 2 and unit is not None:
+        return as_tenths_inch if unit is DeskUnit.INCHES else as_mm
+    return None
+
+
 class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
     """Define the Update Coordinator."""
 
@@ -99,6 +138,12 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         self.height_limit_min_mm: int | None = None
         self.height_limit_max_mm: int | None = None
         self._move_in_flight: bool = False
+        # Monotonic time of the last observed height change or preset recall.
+        self._last_motion_at: float | None = None
+        # Saved slots whose new height the desk has not reported back yet.
+        self._unconfirmed_preset_slots: set[int] = set()
+        # Display unit reported when each preset report arrived, if known.
+        self._preset_report_units: dict[int, DeskUnit | None] = {}
         self.keypad_display_units = None
         self._reconnect_task: "asyncio.Future | None" = None
         self._intentional_disconnect: bool = False
@@ -309,6 +354,15 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
                     DeskEventType.HEIGHT_LIMIT_MIN,
                     self._async_height_limit_min_callback,
                 )
+                # All four slots: this connection's variant is recorded only
+                # after start(), and a report for an unoffered slot is harmless.
+                for slot in BASE_PRESET_SLOTS + EXTENDED_PRESET_SLOTS:
+                    controller.on(
+                        DeskEventType[f"HEIGHT_PRESET_{slot}"],
+                        functools.partial(self._async_height_preset_callback, controller, slot),
+                    )
+                # Preset decoding uses the display unit to break ties.
+                controller.on(DeskEventType.UNIT, self._async_unit_callback)
                 try:
                     await controller.start()  # once per fresh controller
                 except TimeoutError:
@@ -457,9 +511,73 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         return self._desk_variant in _EXTENDED_PRESET_VARIANTS
 
     @property
+    def preset_slots(self) -> tuple[int, ...]:
+        """The preset slots this desk can save and report."""
+        if self.supports_extended_presets:
+            return BASE_PRESET_SLOTS + EXTENDED_PRESET_SLOTS
+        return BASE_PRESET_SLOTS
+
+    @property
     def height_setpoint_mm(self) -> int | None:
         """The height (mm) the desk was last commanded to move to, or None."""
         return self._height_setpoint_mm
+
+    @property
+    def effective_height_limits_mm(self) -> tuple[int, int]:
+        """Resolve the effective min/max (mm) from the desk's reported limits.
+
+        A reported limit wins over the fallback default; partial knowledge
+        is fine (the unreported side stays at its fallback). A misreported
+        inverted range (min >= max) falls back to the full default range.
+        """
+        min_mm = self.height_limit_min_mm
+        if min_mm is None:
+            min_mm = DEFAULT_HEIGHT_LIMIT_MIN_MM
+        max_mm = self.height_limit_max_mm
+        if max_mm is None:
+            max_mm = DEFAULT_HEIGHT_LIMIT_MAX_MM
+        if min_mm >= max_mm:
+            _LOGGER.debug(
+                "Desk %s reported inverted height limits (min %d >= max %d); using fallback range",
+                self.desk_info,
+                min_mm,
+                max_mm,
+            )
+            return DEFAULT_HEIGHT_LIMIT_MIN_MM, DEFAULT_HEIGHT_LIMIT_MAX_MM
+        return min_mm, max_mm
+
+    def height_preset_mm(self, slot: int) -> float | None:
+        """The height (mm) stored in a preset slot, as last reported by the desk.
+
+        Decoded on every read from the live controller's raw report and the
+        current limits and unit, so the result does not depend on whether the
+        preset, unit, or limit reports arrived first, and never outlives a
+        connection. Unknown after a save until the desk reports the new value.
+        """
+        if self._desk is None or slot in self._unconfirmed_preset_slots:
+            return None
+        raw = getattr(self._desk, f"height_preset_{slot}")
+        if raw is None:
+            return None
+        return decode_preset_height_mm(
+            raw,
+            *self.effective_height_limits_mm,
+            unit=(
+                self._preset_report_units.get(slot)
+                or self._desk.unit
+                or self._fallback_unit
+            ),
+        )
+
+    @property
+    def desk_recently_moved(self) -> bool:
+        """Whether the desk may still be moving from a command, recall, or keypad."""
+        if self._move_in_flight or self._height_setpoint_mm is not None:
+            return True
+        return (
+            self._last_motion_at is not None
+            and time.monotonic() - self._last_motion_at < PRESET_SAVE_SETTLE_SECONDS
+        )
 
     async def async_connect(self):
         # Initial setup reads units+height itself (with strict error handling in
@@ -534,14 +652,116 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         """Discard a pending recall if Stop or unload supersedes it."""
         generation = self._motion_generation
         controller = await self._get_or_establish_controller()
-        await self._async_write_motion(
+        if await self._async_write_motion(
             controller, f"move_to_height_preset_{slot}", generation
-        )
+        ):
+            self._last_motion_at = time.monotonic()
+
+    async def async_save_preset(self, slot: int) -> None:
+        """Store the desk's current height in a preset slot.
+
+        The desk saves wherever it is when the command lands, so the save is
+        refused while the desk may still be moving. It shares the motion write
+        path so Stop or unload cancels a save that is still waking the desk.
+        """
+        if slot not in self.preset_slots:
+            raise ValueError(f"Preset {slot} cannot be saved")
+        self._raise_unless_desk_settled(slot)
+        generation = self._motion_generation
+        controller = await self._get_or_establish_controller()
+        marked_slot = False
+
+        def before_write() -> None:
+            nonlocal marked_slot
+            # Re-check under the write lock: motion may start while the desk
+            # wakes. Mark the slot before sending so a report that arrives
+            # while the write is in flight confirms it rather than being lost.
+            # Whether this save owns the mark is decided here too, so a failed
+            # save cannot roll back the mark of a save that overlapped it.
+            self._raise_unless_desk_settled(slot)
+            marked_slot = slot not in self._unconfirmed_preset_slots
+            self._unconfirmed_preset_slots.add(slot)
+
+        try:
+            written = await self._async_write_motion(
+                controller,
+                f"save_height_preset_{slot}",
+                generation,
+                before_write=before_write,
+            )
+        except BaseException:
+            if marked_slot:
+                self._unconfirmed_preset_slots.discard(slot)
+                # A notification during the write may have published unknown.
+                self.async_update_listeners()
+            raise
+        if not written:
+            raise HomeAssistantError(
+                f"Saving preset {slot} for desk {self.desk_info} was cancelled"
+            )
+        _LOGGER.debug("Saved current height as preset %d on desk %s", slot, self.desk_info)
+        self.async_update_listeners()
+        if self._query_on_connect:
+            await self._async_request_preset_report(controller, generation)
+
+    def _raise_unless_desk_settled(self, slot: int) -> None:
+        desk = self._desk
+        if desk is not None and desk.height_raw is not None and desk.height_mm is None:
+            # Height reports in unknown units never reach the coordinator, so
+            # keypad movement would go unnoticed.
+            raise HomeAssistantError(
+                f"Desk {self.desk_info} reports its height in unknown units, so movement "
+                f"cannot be tracked; set a fallback height unit before saving preset {slot}"
+            )
+        if self._height_setpoint_mm is not None:
+            # A setpoint the desk stopped short of is never cleared on its
+            # own, so waiting alone may not help.
+            raise HomeAssistantError(
+                f"Desk {self.desk_info} has a pending Height Setpoint; wait for it to arrive "
+                f"or press Stop to cancel it before saving preset {slot}"
+            )
+        if self.desk_recently_moved:
+            raise HomeAssistantError(
+                f"Desk {self.desk_info} is moving; wait for it to stop before saving preset {slot}"
+            )
+
+    async def _async_request_preset_report(
+        self, controller: DeskController, generation: int
+    ) -> None:
+        """Best-effort: ask the desk to re-report its presets after a save."""
+        try:
+            # On hardware, a bare 0x07 sent straight after the save drew no
+            # reply. Pause, then repeat the wake + 0x07 sequence the desk
+            # answers with its presets on connect.
+            await asyncio.sleep(PRESET_REPORT_DELAY_SECONDS)
+            if (
+                generation != self._motion_generation
+                or self._intentional_disconnect
+                or controller is not self._desk
+                or not self.is_connected
+            ):
+                return
+            await controller.request_height_limits()
+        except (BleakError, TimeoutError):
+            _LOGGER.warning(
+                "Saved a preset on desk %s but could not request its updated presets",
+                self.desk_info,
+                exc_info=True,
+            )
 
     async def _async_write_motion(
-        self, controller: DeskController, name: str, generation: int, *args
+        self,
+        controller: DeskController,
+        name: str,
+        generation: int,
+        *args,
+        before_write: Callable[[], None] | None = None,
     ) -> bool:
-        """Write motion only if it has not been superseded by Stop or unload."""
+        """Write motion only if it has not been superseded by Stop or unload.
+
+        ``before_write`` runs under the write lock just before the packet and
+        may raise to abort the write.
+        """
         # Preserve 0.7.0's wake sequence outside the final-write lock, so a
         # slow wake or reconnect cannot hold Stop behind a later motion write.
         if controller.requires_wake:
@@ -553,6 +773,8 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
         async with self._motion_write_lock:
             if generation != self._motion_generation or self._intentional_disconnect:
                 return False
+            if before_write is not None:
+                before_write()
             await self._async_command_only(controller, name, *args)
             return True
 
@@ -661,6 +883,8 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
     def _async_height_notify_callback(self, height_mm: float) -> None:
         previous_height_mm = self.height_mm
         self.height_mm = height_mm
+        if previous_height_mm is not None and height_mm != previous_height_mm:
+            self._last_motion_at = time.monotonic()
         self._reconcile_height_setpoint(previous_height_mm, height_mm)
         _LOGGER.debug("Height notify callback received height: %s mm", height_mm)
         self.async_set_updated_data(self._desk)
@@ -736,6 +960,30 @@ class UpliftDeskBluetoothCoordinator(DataUpdateCoordinator):
     def _async_height_limit_min_callback(self, min_mm: int) -> None:
         self.height_limit_min_mm = min_mm
         _LOGGER.debug("Height limit min callback received min: %d mm", min_mm)
+        self.async_set_updated_data(self._desk)
+
+    def _async_unit_callback(self, unit: DeskUnit) -> None:
+        _LOGGER.debug("Unit callback received unit: %s", unit)
+        # A preset reported before any unit takes the first unit learned, so a
+        # later display-unit change does not reinterpret it.
+        for slot, report_unit in self._preset_report_units.items():
+            if report_unit is None:
+                self._preset_report_units[slot] = unit
+        self.async_set_updated_data(self._desk)
+
+    def _async_height_preset_callback(
+        self, controller: DeskController, slot: int, raw: int
+    ) -> None:
+        self._unconfirmed_preset_slots.discard(slot)
+        # A later display-unit change does not convert the stored preset, so
+        # decode this report with the unit in effect when it arrived.
+        self._preset_report_units[slot] = controller.unit
+        _LOGGER.debug(
+            "Height preset %d callback received raw value %d (decoded: %s mm)",
+            slot,
+            raw,
+            self.height_preset_mm(slot),
+        )
         self.async_set_updated_data(self._desk)
 
 
